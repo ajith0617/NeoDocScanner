@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Expose files from context.filesDir/NeoDocs/Exports/ for PDF sharing -->
+    <files-path name="neodocs_files" path="." />
+    <!-- Also expose cache dir for temp files -->
+    <cache-path name="cache" path="." />
+</paths>
