@@ -519,7 +519,7 @@ class DocumentFieldExtractorService @Inject constructor() {
         if (Regex("""(?i)^(date\s+of\s+birth|year\s+of\s+birth|dob)\s*:?\s*$""").matches(t)) return true
         if (Regex("""(?i)^(f|fim|fem|fo)\s*/?\s*(sex|gender)?\s*:?\s*$""").matches(t)) return true
         if (Regex("""(?i)^(?:sex|gender)\s*:?\s*$""").matches(t)) return true
-        if (Regex("""(?i)^(identity\s+card|election\s*commission.*|lection\s*commission.*|elector\s+photo.*)$""").matches(t)) return true
+        if (Regex("""(?i)^(identity\s+card|election\s*commission.*|lection\s*commission.*|elector\s+photo.*|.*\bof\s+india\b.*)$""").matches(t)) return true
         if (Regex("""^[A-Z]{2,6}\d{5,12}[A-Z0-9]*$""").matches(compact)) return true
         if (Regex("""(?i)^(pic|epic|spic)$""").matches(t)) return true
         if (Regex("""(?i)^(nme|namme|name)\s*:?\s*$""").matches(t)) return true
@@ -1635,11 +1635,11 @@ class DocumentFieldExtractorService @Inject constructor() {
         private const val VOTER_ID_NAME_LABEL_ONLY   =
             """(?i)^(?:elector'?s?\s+name|electors?\s+name|electors?\s+namme|electors?\s+narne|electoral\s+name|name|nme|namme|narne)$"""
         private const val VOTER_ID_NAME_STOP       =
-            """(?i)(elector'?s?\s+name|electors?\s+name|electors?\s+narne|electoral\s+name|fathers?\s*/\s*mothers?\s*/\s*husbands?\s+name|fathers?\s*names?|fahers?\s+name|fatiers?\s+name|father'?[cs]?\s+(name|lame|nane)|mother'?s?\s+name|husband\s*s?\s*name|(?:re|ro)lations?|relation'?s?\s+name|s/o|w/o|d/o|h/o|male|female|sex|gender|dob|date\s+of\s+birth|age\s+as|address|lection\s*commission|election\s*commission)"""
+            """(?i)(elector'?s?\s+name|electors?\s+name|electors?\s+narne|electoral\s+name|fathers?\s*/\s*mothers?\s*/\s*husbands?\s+name|fathers?\s*names?|fahers?\s+name|fatiers?\s+name|father'?[cs]?\s+(name|lame|nane)|mother'?s?\s+name|husband\s*s?\s*name|(?:re|ro)lations?|relation'?s?\s+name|s/o|w/o|d/o|h/o|male|female|sex|gender|dob|date\s+of\s+birth|age\s+as|address|lection\s*commission|election\s*commission|\bof\s+india\b|\bindia\b)"""
         private const val VOTER_ID_GUARDIAN_LABEL_STRIP =
             """(?i)^\s*(?:(?:fa[rt]her'?s?|fahers?|fatiers?)\s*(?:names?|(?:name|lame|nane))|mother'?s?\s+(?:name|nane)|husband'?s?\s+names?|(?:re|ro)lations?|\bS/O\b|\bW/O\b|\bD/O\b|\bH/O\b)\s*[:\-]?\s*"""
         private const val VOTER_ID_GUARDIAN_STOP =
-            """(?i)(elector'?s?\s+name|electors?\s+name|electoral\s+name|fathers?\s*/\s*mothers?\s*/\s*husbands?\s+name|fathers?\s*names?|fahers?\s+name|fatiers?\s+name|father'?[cs]?\s+(name|lame|nane)|mother'?s?\s+name|husband\s*s?\s*name|(?:re|ro)lations?|relation'?s?\s+name|s/o|w/o|d/o|h/o|male|female|sex|gender|dob|date\s+of\s+birth|age\s+as|address|lection\s*commission|election\s*commission)"""
+            """(?i)(elector'?s?\s+name|electors?\s+name|electoral\s+name|fathers?\s*/\s*mothers?\s*/\s*husbands?\s+name|fathers?\s*names?|fahers?\s+name|fatiers?\s+name|father'?[cs]?\s+(name|lame|nane)|mother'?s?\s+name|husband\s*s?\s*name|(?:re|ro)lations?|relation'?s?\s+name|s/o|w/o|d/o|h/o|male|female|sex|gender|dob|date\s+of\s+birth|age\s+as|address|lection\s*commission|election\s*commission|\bof\s+india\b|\bindia\b)"""
 
         // Driving licence skip keywords
         private val DL_SKIP_KEYWORDS = listOf(
