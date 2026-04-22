@@ -515,7 +515,8 @@ class DocumentFieldExtractorService @Inject constructor() {
         val t = raw.trim()
         if (t.length < 2) return true
         val compact = t.replace(" ", "")
-        if (Regex("""(?i)^(electors?\s+name|elector'?s?\s+name|fathers?\s+(?:name|narme)|fahers?\s+(?:name|narme)|fatiers?\s+(?:name|narme)|mothers?\s+name|husbands?\s+name|fathers?\s*/\s*mothers?\s*/\s*husbands?\s+name)\s*:?\s*$""").matches(t)) return true
+        if (Regex("""(?i)\bepic\b""").containsMatchIn(t)) return true
+        if (Regex("""(?i)^(electors?\s+name|elector'?s?\s+name|fathers?\s+(?:name|narme)|fahers?\s+(?:name|narme)|fatiers?\s+(?:name|narme)|mothers?\s+name|husbands?\s+name|fathers?\s*/\s*mothers?\s*/\s*husbands?\s+name|fathers?[\s.:]*|mothers?[\s.:]*|husbands?[\s.:]*)\s*:?\s*$""").matches(t)) return true
         if (Regex("""(?i)^(date\s+of\s+birth|year\s+of\s+birth|dob)\s*:?\s*$""").matches(t)) return true
         if (Regex("""(?i)^(f|fim|fem|fo)\s*/?\s*(sex|gender)?\s*:?\s*$""").matches(t)) return true
         if (Regex("""(?i)^(?:sex|gender)\s*:?\s*$""").matches(t)) return true
@@ -583,6 +584,7 @@ class DocumentFieldExtractorService @Inject constructor() {
      * Cleans OCR name fragments so we don't return label text like "Electors name".
      */
     private fun voterIDNormaliseNameValue(raw: String): String? {
+        if (Regex("""(?i)\bepic\b""").containsMatchIn(raw)) return null
         val withoutLabel = Regex(VOTER_ID_NAME_LABEL_STRIP, RegexOption.IGNORE_CASE).replace(raw, "")
             .replace(":", " ")
             .trim()
@@ -618,12 +620,38 @@ class DocumentFieldExtractorService @Inject constructor() {
         return voterIDNormaliseGuardianValue(join) ?: chosen
     }
 
+    /**
+     * Father labels sometimes produce two nearby candidates where the first is a longer full name
+     * and the second is the actual father suffix (e.g. "Rohidas Shrirang Sabale" + "Shrirang Sabale").
+     * Prefer the shorter suffix candidate in that case.
+     */
+    private fun voterIDRefineFatherCandidate(chosen: String, merged: List<String>): String {
+        val chosenNorm = chosen.lowercase().replace(Regex("""\s+"""), " ").trim()
+        if (chosenNorm.isBlank() || merged.size < 2) return chosen
+        val suffix = merged
+            .asSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.equals(chosen, ignoreCase = true) }
+            .map { it to it.lowercase().replace(Regex("""\s+"""), " ").trim() }
+            .filter { (_, norm) ->
+                norm.isNotEmpty() &&
+                    chosenNorm.endsWith(norm) &&
+                    chosenNorm != norm &&
+                    norm.split(" ").size >= 2
+            }
+            .minByOrNull { (_, norm) -> norm.length }
+            ?.first
+        return suffix ?: chosen
+    }
+
     private fun voterIDExtractGuardian(lines: List<String>, electorName: String?): Pair<String, String>? {
         val specs = listOf(
             // Combined relation header appears on some cards: Fathers/Mothers/Husbands Name
             Regex("""(?i)fathers?\s*/\s*mothers?\s*/\s*husbands?\s+name\s*:?\s*""") to "Husband",
             // Father / Fahers / Fatiers + optional glued "NAME", typos nane/lame
             Regex("""(?i)(?:fa[rt]her'?s?|fahers?|fatiers?)\s*(?:names?|(?:name|lame|nane|narme))\s*:?\s*""") to "Father",
+            // Split father label variants, e.g. "Fathers.." on one line and "Name" on next.
+            Regex("""(?i)(?:fa[rt]her'?s?|fahers?|fatiers?)\s*[.:]{1,}\s*""") to "Father",
             Regex("""(?i)mother'?s?\s+(?:name|nane)\s*:?\s*""") to "Mother",
             Regex("""(?i)husband\s*s?\s*names?\s*:?\s*(.+)""") to "Husband",
             Regex("""(?i)husband\s*s?\s*names?([A-Za-z][A-Za-z]{2,})\s*$""") to "Husband",
@@ -652,7 +680,8 @@ class DocumentFieldExtractorService @Inject constructor() {
                 if (merged.isEmpty()) continue
                 val dedupe = relation in setOf("Father", "Mother", "Husband")
                 val chosen = voterIDPickDistinctGuardian(merged, if (dedupe) electorName else null) ?: continue
-                val valueOut = voterIDMergeAdjacentFatherParts(relation, merged, electorName, chosen)
+                val refined = if (relation == "Father") voterIDRefineFatherCandidate(chosen, merged) else chosen
+                val valueOut = voterIDMergeAdjacentFatherParts(relation, merged, electorName, refined)
                 return Pair(relation, valueOut)
             }
         }
@@ -660,6 +689,7 @@ class DocumentFieldExtractorService @Inject constructor() {
     }
 
     private fun voterIDNormaliseGuardianValue(raw: String): String? {
+        if (Regex("""(?i)\bepic\b""").containsMatchIn(raw)) return null
         val cleaned = Regex(VOTER_ID_GUARDIAN_LABEL_STRIP, RegexOption.IGNORE_CASE).replace(raw, "")
             .replace(":", " ")
             .replace("/", " ")
@@ -1635,7 +1665,7 @@ class DocumentFieldExtractorService @Inject constructor() {
         private const val VOTER_ID_NAME_LABEL_ONLY   =
             """(?i)^(?:elector'?s?\s+name|electors?\s+name|electors?\s+namme|electors?\s+narne|electoral\s+name|name|nme|namme|narne)$"""
         private const val VOTER_ID_NAME_STOP       =
-            """(?i)(elector'?s?\s+name|electors?\s+name|electors?\s+narne|electoral\s+name|fathers?\s*/\s*mothers?\s*/\s*husbands?\s+name|fathers?\s*names?|fahers?\s+(?:name|narme)|fatiers?\s+(?:name|narme)|father'?[cs]?\s+(name|lame|nane|narme)|mother'?s?\s+name|husband\s*s?\s*name|(?:re|ro)lations?|relation'?s?\s+name|s/o|w/o|d/o|h/o|male|female|sex|gender|dob|date\s+of\s+birth|age\s+as|address|lection\s*commission|election\s*commission|\bof\s+india\b|\bindia\b)"""
+            """(?i)(elector'?s?\s+name|electors?\s+name|electors?\s+narne|electoral\s+name|fathers?\s*/\s*mothers?\s*/\s*husbands?\s+name|fathers?\s*names?|fahers?\s+(?:name|narme)|fatiers?\s+(?:name|narme)|father'?[cs]?\s+(name|lame|nane|narme)|\bfathers?\b|mother'?s?\s+name|\bmothers?\b|husband\s*s?\s*name|\bhusbands?\b|(?:re|ro)lations?|relation'?s?\s+name|s/o|w/o|d/o|h/o|male|female|sex|gender|dob|date\s+of\s+birth|age\s+as|address|lection\s*commission|election\s*commission|\bof\s+india\b|\bindia\b)"""
         private const val VOTER_ID_GUARDIAN_LABEL_STRIP =
             """(?i)^\s*(?:(?:fa[rt]her'?s?|fahers?|fatiers?)\s*(?:names?|(?:name|lame|nane|narme))|mother'?s?\s+(?:name|nane)|husband'?s?\s+names?|(?:re|ro)lations?|\bS/O\b|\bW/O\b|\bD/O\b|\bH/O\b)\s*[:\-]?\s*"""
         private const val VOTER_ID_GUARDIAN_STOP =

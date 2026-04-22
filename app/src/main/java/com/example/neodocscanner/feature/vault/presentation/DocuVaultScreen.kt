@@ -96,7 +96,7 @@ import com.example.neodocscanner.feature.vault.presentation.tabs.VaultChecklistT
 import com.example.neodocscanner.feature.vault.presentation.tabs.VaultReviewTab
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.RESULT_FORMAT_JPEG
-import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.SCANNER_MODE_FULL
+import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.SCANNER_MODE_BASE
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
 import kotlinx.coroutines.launch
@@ -129,7 +129,8 @@ fun DocuVaultScreen(
     // ── ML Kit Document Scanner ───────────────────────────────────────────────
 
     val scannerOptions = GmsDocumentScannerOptions.Builder()
-        .setScannerMode(SCANNER_MODE_FULL)
+        // BASE mode avoids the full auto-enhancement/filter flow; keep processing manual.
+        .setScannerMode(SCANNER_MODE_BASE)
         .setResultFormats(RESULT_FORMAT_JPEG)
         .setPageLimit(20)
         // Lets users pick existing photos from the device inside the ML Kit scanner UI (same flow as camera).
