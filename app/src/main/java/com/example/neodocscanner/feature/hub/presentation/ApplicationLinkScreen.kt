@@ -1,6 +1,8 @@
 package com.example.neodocscanner.feature.hub.presentation
 
 import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.util.Log
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -49,7 +51,8 @@ fun ApplicationLinkScreen(
     initialPayload: String? = null,
     viewModel: ApplicationHubViewModel = hiltViewModel()
 ) {
-    val activity = LocalContext.current as Activity
+    val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
     var rawPayload by remember(initialPayload) { mutableStateOf(initialPayload.orEmpty()) }
     var parseError by remember { mutableStateOf<String?>(null) }
     var parsedSummary by remember { mutableStateOf<String?>(null) }
@@ -59,7 +62,7 @@ fun ApplicationLinkScreen(
             .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
             .build()
     }
-    val scanner = remember { GmsBarcodeScanning.getClient(activity, scannerOptions) }
+    val scanner = remember(context) { GmsBarcodeScanning.getClient(context, scannerOptions) }
 
     Scaffold(
         topBar = {
@@ -100,6 +103,10 @@ fun ApplicationLinkScreen(
             ) {
                 Button(
                     onClick = {
+                        if (activity == null) {
+                            parseError = "QR scan unavailable in current context."
+                            return@Button
+                        }
                         scanner.startScan()
                             .addOnSuccessListener { barcode ->
                                 val scanned = barcode.rawValue
@@ -192,5 +199,11 @@ fun ApplicationLinkScreen(
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
