@@ -52,8 +52,12 @@ class DocumentNamingService @Inject constructor() {
         val classPrefix = prefixFor(documentClass)
         val timestamp   = timestampString(dateAdded)
 
-        // Priority 1: use the "Name" field extracted by DocumentFieldExtractorService
-        val extractedName = fields.firstOrNull { it.label == "Name" }?.value
+        // Priority 1: primary person name from extracted fields (Voter ID uses "Name / Elector's Name").
+        val extractedName = fields.firstOrNull { f ->
+            f.label == "Name" ||
+                f.label == "Name / Elector's Name" ||
+                f.label == "Electors Name"
+        }?.value
         val sanitisedName = extractedName?.let { sanitise(it) }
 
         return if (!sanitisedName.isNullOrEmpty()) {

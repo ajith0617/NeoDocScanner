@@ -93,6 +93,8 @@ dependencies {
     implementation(libs.mlkit.document.scanner)
     // ML Kit — Text Recognition (OCR, replaces Vision framework)
     implementation(libs.mlkit.text.recognition)
+    // ML Kit — Barcode/QR scanner (for QR onboarding link flow)
+    implementation(libs.mlkit.code.scanner)
     // TensorFlow Lite — document image classification
     implementation(libs.tensorflow.lite)
     implementation(libs.tensorflow.lite.support)

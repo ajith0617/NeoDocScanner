@@ -1,5 +1,6 @@
 package com.example.neodocscanner
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -31,9 +32,23 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color    = MaterialTheme.colorScheme.background
                 ) {
-                    AppNavigation()
+                    AppNavigation(
+                        initialQrPayload = extractQrPayload(intent)
+                    )
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+    }
+
+    private fun extractQrPayload(intent: Intent?): String? {
+        val data = intent?.data ?: return null
+        if (data.scheme != "neodocs") return null
+        val payload = data.getQueryParameter("payload")
+        return payload?.takeIf { it.isNotBlank() }
     }
 }

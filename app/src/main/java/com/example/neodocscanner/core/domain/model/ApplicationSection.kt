@@ -30,4 +30,21 @@ data class ApplicationSection(
                 emptyList()
             }
         }
+
+    /**
+     * When the user manually moves a document into a category, infer what
+     * persisted [DocumentClass] should be shown.
+     *
+     * UX rule:
+     * - 0 accepted classes  -> OTHER (custom/non-classified bucket)
+     * - 1 accepted class    -> that exact class
+     * - >1 accepted classes -> OTHER (category bucket, avoid stale prior ML label)
+     */
+    fun inferredDocumentClassForMove(previous: DocumentClass): DocumentClass? {
+        val accepted = acceptedClasses
+        if (accepted.isEmpty()) return DocumentClass.OTHER
+        if (accepted.size > 1) return DocumentClass.OTHER
+        val primaryName = accepted.firstOrNull() ?: return DocumentClass.OTHER
+        return DocumentClass.entries.find { it.displayName == primaryName } ?: DocumentClass.OTHER
+    }
 }

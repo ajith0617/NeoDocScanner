@@ -12,31 +12,46 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ClearAll
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GroupWork
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -56,8 +71,10 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -72,9 +89,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.neodocscanner.core.domain.model.Document
 import com.example.neodocscanner.core.domain.model.ScanProcessingPhase
 import com.example.neodocscanner.feature.vault.presentation.components.DocumentContextMenuState
-import com.example.neodocscanner.feature.vault.presentation.components.GroupNameSheet
 import com.example.neodocscanner.feature.vault.presentation.components.GroupPageReorderSheet
 import com.example.neodocscanner.feature.vault.presentation.components.MoveToSectionSheet
+import com.example.neodocscanner.feature.vault.presentation.components.RoutingConflictReviewSheet
 import com.example.neodocscanner.feature.vault.presentation.tabs.VaultChecklistTab
 import com.example.neodocscanner.feature.vault.presentation.tabs.VaultReviewTab
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
@@ -101,6 +118,7 @@ fun DocuVaultScreen(
     onOpenPdfViewer: (documentId: String) -> Unit = {},
     viewModel: DocuVaultViewModel = hiltViewModel()
 ) {
+    data class PendingDelete(val id: String, val isGroup: Boolean)
     val uiState      by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHost = remember { SnackbarHostState() }
     val scope        = rememberCoroutineScope()
@@ -114,10 +132,14 @@ fun DocuVaultScreen(
         .setScannerMode(SCANNER_MODE_FULL)
         .setResultFormats(RESULT_FORMAT_JPEG)
         .setPageLimit(20)
+        // Lets users pick existing photos from the device inside the ML Kit scanner UI (same flow as camera).
         .setGalleryImportAllowed(true)
         .build()
 
     val scanner = remember { GmsDocumentScanning.getClient(scannerOptions) }
+    var pendingSectionHint by remember { mutableStateOf<String?>(null) }
+    var pendingDelete by remember { mutableStateOf<PendingDelete?>(null) }
+    var showDeleteSelectedConfirm by remember { mutableStateOf(false) }
 
     val scanLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
@@ -125,16 +147,24 @@ fun DocuVaultScreen(
         if (result.resultCode == Activity.RESULT_OK) {
             val scanResult = GmsDocumentScanningResult.fromActivityResultIntent(result.data)
             val uris = scanResult?.pages?.mapNotNull { it.imageUri } ?: emptyList()
-            if (uris.isNotEmpty()) viewModel.onScanResult(uris)
+            if (uris.isNotEmpty()) {
+                viewModel.onScanResult(
+                    imageUris = uris,
+                    preferredSectionId = pendingSectionHint
+                )
+            }
         }
+        pendingSectionHint = null
     }
 
-    fun launchScanner() {
+    fun launchScanner(sectionIdHint: String? = null) {
+        pendingSectionHint = sectionIdHint
         scanner.getStartScanIntent(activity)
             .addOnSuccessListener { intentSender ->
                 scanLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
             }
             .addOnFailureListener { e ->
+                pendingSectionHint = null
                 Log.e("DocuVaultScreen", "Scanner launch failed", e)
                 scope.launch { snackbarHost.showSnackbar("Scanner unavailable: ${e.localizedMessage}") }
             }
@@ -206,22 +236,98 @@ fun DocuVaultScreen(
 
     // ── Sheets ────────────────────────────────────────────────────────────────
 
-    val moveSheetState        = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val groupNameSheetState   = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val pageReorderSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val moveSheetState           = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val pageReorderSheetState    = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val routingConflictSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    var vaultOverflowMenuExpanded by remember { mutableStateOf(false) }
 
     // ── Main scaffold ─────────────────────────────────────────────────────────
 
     Scaffold(
         modifier     = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+        contentWindowInsets = WindowInsets.safeDrawing.only(
+            WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom
+        ),
         snackbarHost = { SnackbarHost(snackbarHost) },
 
         topBar = {
             Column {
                 TopAppBar(
+                    windowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top),
                     title = {
                         if (uiState.isSelectionMode) {
-                            Text("${uiState.selectedCount} selected", fontWeight = FontWeight.SemiBold)
+                            val categoriesTab = pagerState.currentPage == 0
+                            val selectAllTargetIds = remember(
+                                categoriesTab,
+                                uiState.sectionsWithDocs,
+                                uiState.inboxDocuments
+                            ) {
+                                if (categoriesTab) {
+                                    buildSet {
+                                        uiState.sectionsWithDocs.forEach { swd ->
+                                            swd.documents.forEach { add(it.id) }
+                                        }
+                                        uiState.inboxDocuments.forEach { add(it.id) }
+                                    }
+                                } else {
+                                    uiState.inboxDocuments.map { it.id }.toSet()
+                                }
+                            }
+                            val allVaultTabTargetsSelected = remember(
+                                selectAllTargetIds,
+                                uiState.selectedDocumentIds
+                            ) {
+                                selectAllTargetIds.isNotEmpty() &&
+                                    selectAllTargetIds == uiState.selectedDocumentIds.toSet()
+                            }
+                            Row(
+                                modifier            = Modifier.fillMaxWidth(),
+                                verticalAlignment   = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text       = "${uiState.selectedCount} selected",
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines   = 1,
+                                    overflow   = TextOverflow.Ellipsis,
+                                    modifier   = Modifier.weight(1f)
+                                )
+                                TextButton(
+                                    onClick = {
+                                        viewModel.toggleSelectAllInCurrentVaultTab(
+                                            categoriesTab = categoriesTab,
+                                            sectionsWithDocs = uiState.sectionsWithDocs,
+                                            inboxDocs = uiState.inboxDocuments
+                                        )
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (allVaultTabTargetsSelected) {
+                                            Icons.Default.ClearAll
+                                        } else {
+                                            Icons.Default.SelectAll
+                                        },
+                                        contentDescription = if (allVaultTabTargetsSelected) {
+                                            "Deselect all"
+                                        } else {
+                                            "Select all"
+                                        },
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (allVaultTabTargetsSelected) {
+                                            "Deselect all"
+                                        } else {
+                                            "Select all"
+                                        },
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
                         } else {
                             Text(
                                 text       = uiState.instanceName,
@@ -229,6 +335,70 @@ fun DocuVaultScreen(
                                 overflow   = TextOverflow.Ellipsis,
                                 fontWeight = FontWeight.SemiBold
                             )
+                        }
+                    },
+                    actions = {
+                        if (!uiState.isSelectionMode) {
+                            Box {
+                                IconButton(
+                                    onClick = { vaultOverflowMenuExpanded = true }
+                                ) {
+                                    Icon(
+                                        Icons.Default.MoreVert,
+                                        contentDescription = "More options"
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = vaultOverflowMenuExpanded,
+                                    onDismissRequest = { vaultOverflowMenuExpanded = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Select all") },
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Default.SelectAll,
+                                                contentDescription = null
+                                            )
+                                        },
+                                        onClick = {
+                                            vaultOverflowMenuExpanded = false
+                                            viewModel.selectAllInCurrentVaultTab(
+                                                categoriesTab = pagerState.currentPage == 0,
+                                                sectionsWithDocs = uiState.sectionsWithDocs,
+                                                inboxDocs = uiState.inboxDocuments
+                                            )
+                                        }
+                                    )
+                                    HorizontalDivider()
+                                    listOf(
+                                        2 to "2 per row",
+                                        3 to "3 per row",
+                                        4 to "4 per row"
+                                    ).forEach { (cols, label) ->
+                                        DropdownMenuItem(
+                                            text = { Text(label) },
+                                            leadingIcon = {
+                                                Box(
+                                                    modifier = Modifier.size(24.dp),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    if (uiState.galleryGridColumns == cols) {
+                                                        Icon(
+                                                            Icons.Default.Check,
+                                                            contentDescription = null,
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                    }
+                                                }
+                                            },
+                                            onClick = {
+                                                vaultOverflowMenuExpanded = false
+                                                viewModel.setGalleryGridColumns(cols)
+                                            }
+                                        )
+                                    }
+                                }
+                            }
                         }
                     },
                     navigationIcon = {
@@ -239,19 +409,6 @@ fun DocuVaultScreen(
                         } else {
                             IconButton(onClick = onNavigateBack) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                            }
-                        }
-                    },
-                    actions = {
-                        if (uiState.isSelectionMode) {
-                            IconButton(onClick = {
-                                viewModel.selectAll(
-                                    allDocs = uiState.allDocuments,
-                                    inboxDocs = uiState.inboxDocuments,
-                                    sectionsWithDocs = uiState.sectionsWithDocs
-                                )
-                            }) {
-                                Icon(Icons.Default.SelectAll, contentDescription = "Select all")
                             }
                         }
                     },
@@ -267,7 +424,7 @@ fun DocuVaultScreen(
                             onClick  = { scope.launch { pagerState.animateScrollToPage(index) } },
                             text = {
                                 val badge = when (index) {
-                                    0 -> if (uiState.activeDocumentCount > 0) "$title (${uiState.activeDocumentCount})" else title
+                                    0 -> if (uiState.categorizedDocumentCount > 0) "$title (${uiState.categorizedDocumentCount})" else title
                                     1 -> if (uiState.inboxCount > 0) "$title (${uiState.inboxCount})" else title
                                     else -> title
                                 }
@@ -285,11 +442,20 @@ fun DocuVaultScreen(
         floatingActionButton = {
             if (uiState.scanPhase is ScanProcessingPhase.Idle && !uiState.isSelectionMode) {
                 FloatingActionButton(
-                    onClick        = { launchScanner() },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor   = MaterialTheme.colorScheme.onPrimary
+                    onClick            = { launchScanner(null) },
+                    containerColor     = MaterialTheme.colorScheme.primary,
+                    contentColor       = MaterialTheme.colorScheme.onPrimary,
+                    shape              = CircleShape,
+                    elevation          = FloatingActionButtonDefaults.elevation(
+                        defaultElevation = 8.dp,
+                        pressedElevation = 10.dp
+                    )
                 ) {
-                    Icon(Icons.Default.CameraAlt, contentDescription = "Scan documents")
+                    Icon(
+                        imageVector = Icons.Default.CameraAlt,
+                        contentDescription = "Scan documents",
+                        modifier = Modifier.size(22.dp)
+                    )
                 }
             }
         },
@@ -311,7 +477,7 @@ fun DocuVaultScreen(
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (uiState.canGroupSelected) {
+                        if (uiState.canShowSelectionGroupActions) {
                             FilledTonalButton(
                                 onClick  = { viewModel.requestSelectionGroupName(andMove = false) },
                                 modifier = Modifier.weight(1f)
@@ -320,10 +486,21 @@ fun DocuVaultScreen(
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Group")
                             }
+                            if (uiState.canGroupAndMoveSelected) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                FilledTonalButton(
+                                    onClick  = { viewModel.requestSelectionGroupName(andMove = true) },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.GroupWork, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Group & Move")
+                                }
+                            }
                             Spacer(modifier = Modifier.width(8.dp))
                         }
                         Button(
-                            onClick  = { viewModel.deleteSelected() },
+                            onClick  = { showDeleteSelectedConfirm = true },
                             colors   = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.error
                             ),
@@ -332,6 +509,108 @@ fun DocuVaultScreen(
                             Icon(Icons.Default.Delete, contentDescription = null)
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("Delete (${uiState.selectedCount})")
+                        }
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = !uiState.isSelectionMode && uiState.isGenericGroupingMode,
+                enter   = slideInVertically(initialOffsetY = { it }),
+                exit    = slideOutVertically(targetOffsetY = { it })
+            ) {
+                Surface(
+                    tonalElevation = 3.dp,
+                    shadowElevation = 4.dp
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (uiState.genericGroupingOrderedIds.size <= 1) {
+                                "Tap documents to add in group"
+                            } else {
+                                "${uiState.genericGroupingOrderedIds.size} selected"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = viewModel::cancelAllGroupingModes) {
+                            Text("Cancel")
+                        }
+                        if (uiState.canConfirmGenericGroup) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            FilledTonalButton(onClick = viewModel::requestGenericGroupName) {
+                                Icon(Icons.Default.GroupWork, contentDescription = null)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Group")
+                            }
+                        }
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = !uiState.isSelectionMode && uiState.isAadhaarPairingMode,
+                enter   = slideInVertically(initialOffsetY = { it }),
+                exit    = slideOutVertically(targetOffsetY = { it })
+            ) {
+                Surface(tonalElevation = 3.dp, shadowElevation = 4.dp) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (uiState.canConfirmAadhaarPair) "2 selected" else "Tap another Aadhaar card",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = viewModel::cancelAllGroupingModes) { Text("Cancel") }
+                        if (uiState.canConfirmAadhaarPair) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            FilledTonalButton(onClick = { viewModel.confirmAadhaarPairSelection(uiState.allDocuments) }) {
+                                Icon(Icons.Default.GroupWork, contentDescription = null)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Pair")
+                            }
+                        }
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = !uiState.isSelectionMode && uiState.isPassportPairingMode,
+                enter   = slideInVertically(initialOffsetY = { it }),
+                exit    = slideOutVertically(targetOffsetY = { it })
+            ) {
+                Surface(tonalElevation = 3.dp, shadowElevation = 4.dp) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (uiState.canConfirmPassportPair) "2 selected" else "Tap another Passport page",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = viewModel::cancelAllGroupingModes) { Text("Cancel") }
+                        if (uiState.canConfirmPassportPair) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            FilledTonalButton(onClick = { viewModel.confirmPassportPairSelection(uiState.allDocuments) }) {
+                                Icon(Icons.Default.GroupWork, contentDescription = null)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Pair")
+                            }
                         }
                     }
                 }
@@ -360,11 +639,11 @@ fun DocuVaultScreen(
                             onEnterSelectionMode     = { viewModel.enterSelectionMode(it) },
                             onToggleSelection        = viewModel::toggleSelection,
                             onStartAadhaarPairing    = viewModel::startAadhaarPairing,
-                            onConfirmAadhaarPair     = { viewModel.confirmAadhaarPair(it, uiState.allDocuments) },
+                            onConfirmAadhaarPair     = { viewModel.toggleAadhaarPairingSelection(it, uiState.allDocuments) },
                             onStartPassportPairing   = viewModel::startPassportPairing,
-                            onConfirmPassportPair    = { viewModel.confirmPassportPair(it, uiState.allDocuments) },
+                            onConfirmPassportPair    = { viewModel.togglePassportPairingSelection(it, uiState.allDocuments) },
                             onStartGenericGrouping   = viewModel::startGenericGrouping,
-                            onToggleGenericCandidate = { viewModel.toggleGenericGroupingCandidate(it, uiState.allDocuments) },
+                            onToggleGenericCandidate = { viewModel.toggleGenericGroupingSelection(it, uiState.allDocuments) },
                             onRequestGenericGroupName = viewModel::requestGenericGroupName,
                             onCancelGroupingModes    = viewModel::cancelAllGroupingModes,
                             onShowMoveSheet          = viewModel::showMoveSheet,
@@ -372,33 +651,38 @@ fun DocuVaultScreen(
                             onShowPageReorderSheet   = viewModel::showPageReorderSheet,
                             onExportAsPdf            = viewModel::exportGroupAsPDF,
                             onUngroupDocuments       = viewModel::ungroupDocuments,
-                            onDeleteDocument         = viewModel::deleteDocument,
-                            onDeleteGroup            = viewModel::deleteGroup,
+                            onDeleteDocument         = { id -> pendingDelete = PendingDelete(id, isGroup = false) },
+                            onDeleteGroup            = { id -> pendingDelete = PendingDelete(id, isGroup = true) },
                             onUnmergePdf             = viewModel::unmergePDF,
                             onSharePdf               = viewModel::sharePDF,
-                            onOpenPdfViewer          = viewModel::openPdfViewer
+                            onOpenPdfViewer          = viewModel::openPdfViewer,
+                            onScanToSection          = { sectionId -> launchScanner(sectionId) },
+                            onLongPressSection       = viewModel::enterSectionSelectionAll,
+                            onToggleSectionSelection = viewModel::toggleSectionSelection
                         )
                         1 -> VaultReviewTab(
                             documents                = uiState.inboxDocuments,
+                            gridColumns              = uiState.galleryGridColumns,
+                            allDocumentsInScope      = uiState.allDocuments.filter { it.sectionId == null },
                             contextMenuState         = contextMenuState,
-                            onDeleteDocument         = viewModel::deleteDocument,
                             onOpenDocument           = onOpenDocument,
                             onReclassify             = viewModel::reclassifyAndReroute,
                             onEnterSelectionMode     = { viewModel.enterSelectionMode(it, "__inbox__") },
                             onToggleSelection        = viewModel::toggleSelection,
                             onStartAadhaarPairing    = viewModel::startAadhaarPairing,
-                            onConfirmAadhaarPair     = { viewModel.confirmAadhaarPair(it, uiState.allDocuments) },
+                            onConfirmAadhaarPair     = { viewModel.toggleAadhaarPairingSelection(it, uiState.allDocuments) },
                             onStartPassportPairing   = viewModel::startPassportPairing,
-                            onConfirmPassportPair    = { viewModel.confirmPassportPair(it, uiState.allDocuments) },
+                            onConfirmPassportPair    = { viewModel.togglePassportPairingSelection(it, uiState.allDocuments) },
                             onStartGenericGrouping   = viewModel::startGenericGrouping,
-                            onToggleGenericCandidate = { viewModel.toggleGenericGroupingCandidate(it, uiState.allDocuments) },
+                            onToggleGenericCandidate = { viewModel.toggleGenericGroupingSelection(it, uiState.allDocuments) },
                             onCancelGroupingModes    = viewModel::cancelAllGroupingModes,
                             onShowMoveSheet          = viewModel::showMoveSheet,
                             onShowRenameGroupDialog  = viewModel::showRenameGroupDialog,
                             onShowPageReorderSheet   = viewModel::showPageReorderSheet,
                             onExportAsPdf            = viewModel::exportGroupAsPDF,
                             onUngroupDocuments       = viewModel::ungroupDocuments,
-                            onDeleteGroup            = viewModel::deleteGroup,
+                            onDeleteDocument         = { id -> pendingDelete = PendingDelete(id, isGroup = false) },
+                            onDeleteGroup            = { id -> pendingDelete = PendingDelete(id, isGroup = true) },
                             onUnmergePdf             = viewModel::unmergePDF,
                             onSharePdf               = viewModel::sharePDF,
                             onOpenPdfViewer          = viewModel::openPdfViewer
@@ -425,18 +709,34 @@ fun DocuVaultScreen(
         )
     }
 
-    // ── Group name sheet ──────────────────────────────────────────────────────
+    // ── Group name modal ──────────────────────────────────────────────────────
 
     if (uiState.showGroupNameSheet) {
-        GroupNameSheet(
-            name         = uiState.pendingGroupNameText,
-            onNameChange = viewModel::onGroupNameTextChange,
-            isAadhaar    = uiState.pendingGroupIsAadhaar,
-            isPassport   = uiState.pendingGroupIsPassport,
-            docCount     = if (uiState.pendingGroupIsSelection) uiState.selectedCount else 2,
-            sheetState   = groupNameSheetState,
-            onConfirm    = { name -> viewModel.finalizeGroup(name) },
-            onDismiss    = viewModel::dismissGroupNameSheet
+        val docCount = when {
+            uiState.pendingGroupIsSelection -> uiState.selectedCount
+            uiState.pendingGroupIsAadhaar || uiState.pendingGroupIsPassport -> 2
+            else -> uiState.genericGroupingOrderedIds.size
+        }
+        AlertDialog(
+            onDismissRequest = viewModel::dismissGroupNameSheet,
+            title = { Text("Name group") },
+            text = {
+                OutlinedTextField(
+                    value = uiState.pendingGroupNameText,
+                    onValueChange = viewModel::onGroupNameTextChange,
+                    label = { Text("Group name") },
+                    supportingText = { Text("$docCount document(s)") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                Button(onClick = { viewModel.finalizeGroup(uiState.pendingGroupNameText) }) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissGroupNameSheet) { Text("Cancel") }
+            }
         )
     }
 
@@ -482,6 +782,59 @@ fun DocuVaultScreen(
             }
         )
     }
+
+    // ── Routing conflict review (hint vs ML, one or many documents) ───────────
+    if (uiState.pendingRoutingConflicts.isNotEmpty()) {
+        RoutingConflictReviewSheet(
+            conflicts = uiState.pendingRoutingConflicts,
+            documentById = uiState.allDocuments.associateBy { it.id },
+            sheetState = routingConflictSheetState,
+            onDismiss = viewModel::dismissRoutingConflictsKeepAllHinted,
+            onResolveOne = viewModel::resolveRoutingConflict,
+            onKeepAllHinted = viewModel::dismissRoutingConflictsKeepAllHinted,
+            onMoveAllToDetected = viewModel::applyAllRoutingConflictsUseDetected
+        )
+    }
+
+    pendingDelete?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text(if (pending.isGroup) "Delete group?" else "Delete file?") },
+            text = { Text(if (pending.isGroup) "This will delete all files in the group." else "This file will be permanently deleted.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (pending.isGroup) viewModel.deleteGroup(pending.id) else viewModel.deleteDocument(pending.id)
+                        pendingDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showDeleteSelectedConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteSelectedConfirm = false },
+            title = { Text("Delete ${uiState.selectedCount} file(s)?") },
+            text = { Text("This action cannot be undone.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteSelected()
+                        showDeleteSelectedConfirm = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteSelectedConfirm = false }) { Text("Cancel") }
+            }
+        )
+    }
 }
 
 // ── Context menu state builder ─────────────────────────────────────────────────
@@ -500,13 +853,13 @@ private fun buildContextMenuState(uiState: VaultUiState): DocumentContextMenuSta
         isSelectionMode         = uiState.isSelectionMode,
         selectedIds             = uiState.selectedDocumentIds.toSet(),
         selectionOrder          = uiState.selectedDocumentIds,
+        selectionScopeSectionId = uiState.selectionSectionId,
         isAadhaarPairingMode    = uiState.isAadhaarPairingMode,
-        aadhaarAnchorId         = uiState.aadhaarPairingAnchorId,
+        aadhaarPairingOrder     = uiState.aadhaarPairingOrderedIds,
         isPassportPairingMode   = uiState.isPassportPairingMode,
-        passportAnchorId        = uiState.passportPairingAnchorId,
+        passportPairingOrder    = uiState.passportPairingOrderedIds,
         isGenericGroupingMode   = uiState.isGenericGroupingMode,
-        genericAnchorId         = uiState.genericGroupingAnchorId,
-        genericCandidateIds     = uiState.genericGroupingCandidateIds.toSet(),
+        genericGroupingOrder    = uiState.genericGroupingOrderedIds,
         groupMemberCounts       = docGroupCounts
     )
 }

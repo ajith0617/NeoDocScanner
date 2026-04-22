@@ -68,4 +68,10 @@ sealed class Screen(val route: String) {
      * iOS equivalent: SettingsView.swift (sheet from hub toolbar).
      */
     data object Settings : Screen("settings")
+
+    /** Field extractor diagnostics screen (developer utility). */
+    data object FieldExtractorDebug : Screen("field_extractor_debug")
+
+    /** QR payload link flow to create a vault from server metadata. */
+    data object ApplicationLink : Screen("application_link")
 }

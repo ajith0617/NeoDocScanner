@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -36,13 +37,15 @@ import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.TextFields
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -78,6 +81,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.drawscope.Stroke
 import android.graphics.Bitmap
+import kotlin.math.abs
 
 /**
  * Full-screen document image viewer with:
@@ -100,6 +104,7 @@ fun DocumentViewerScreen(
     val state by viewModel.state.collectAsState()
 
     val detailSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val removeSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
 
     val document = state.document ?: return
@@ -154,42 +159,67 @@ fun DocumentViewerScreen(
                 }
             }
 
-            // ── Bottom-right OCR button ───────────────────────────────────────
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 20.dp, bottom = 40.dp)
-            ) {
-                OcrActionButton(state = state, viewModel = viewModel)
-            }
+            // ── Bottom-right OCR button (temporarily disabled) ───────────────
+            // Box(
+            //     modifier = Modifier
+            //         .align(Alignment.BottomEnd)
+            //         .padding(end = 20.dp, bottom = 40.dp)
+            // ) {
+            //     OcrActionButton(state = state, viewModel = viewModel)
+            // }
         }
     }
 
-    // ── Remove-from-group dialog ──────────────────────────────────────────────
+    // ── Remove-from-group confirmation modal ─────────────────────────────────
     if (state.showRemoveFromGroupDialog) {
-        AlertDialog(
+        ModalBottomSheet(
             onDismissRequest = viewModel::dismissRemoveFromGroupDialog,
-            title = { Text("Remove from Group", fontWeight = FontWeight.SemiBold) },
-            text  = { Text("This page will be removed from the group. The file will not be deleted.") },
-            confirmButton = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(
-                        onClick = { viewModel.removeFromGroup(sendToUncategorised = true) },
-                        colors  = ButtonDefaults.textButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error
-                        )
-                    ) { Text("Remove & Move to Uncategorised") }
-                    TextButton(
-                        onClick = { viewModel.removeFromGroup(sendToUncategorised = false) },
-                        colors  = ButtonDefaults.textButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error
-                        )
-                    ) { Text("Remove & Keep in Current Category") }
-                    TextButton(onClick = viewModel::dismissRemoveFromGroupDialog) { Text("Cancel") }
+            sheetState = removeSheetState
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Remove page from group?",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "This removes only this page from the current group. The file itself will not be deleted.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Button(
+                    onClick = { viewModel.removeFromGroup(sendToUncategorised = true) },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    )
+                ) {
+                    Text("Remove & move to Uncategorised")
                 }
-            },
-            dismissButton = null
-        )
+
+                OutlinedButton(
+                    onClick = { viewModel.removeFromGroup(sendToUncategorised = false) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Remove & keep in current category")
+                }
+
+                TextButton(
+                    onClick = viewModel::dismissRemoveFromGroupDialog,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Cancel")
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+        }
     }
 
     // ── Detail sheet ──────────────────────────────────────────────────────────
@@ -281,7 +311,8 @@ private fun GroupedPageViewer(
     Box(modifier = Modifier.fillMaxSize()) {
         HorizontalPager(
             state    = pagerState,
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize(),
+            userScrollEnabled = false
         ) { pageIdx ->
             val doc    = allPages.getOrNull(pageIdx)
             val bitmap = doc?.let { state.imageBitmaps[it.id] }
@@ -292,6 +323,12 @@ private fun GroupedPageViewer(
                 ZoomableImage(
                     bitmap         = bitmap,
                     regions        = regions,
+                    onSwipePrevious = {
+                        if (pageIdx > 0) viewModel.goToPage(pageIdx - 1)
+                    },
+                    onSwipeNext = {
+                        if (pageIdx < allPages.lastIndex) viewModel.goToPage(pageIdx + 1)
+                    },
                     onRegionTapped = { region ->
                         tappedRegion = if (tappedRegion?.text == region?.text) null else region
                     }
@@ -323,14 +360,21 @@ private fun GroupedPageViewer(
 private fun ZoomableImage(
     bitmap: Bitmap,
     regions: List<TextRegion>,
+    onSwipePrevious: (() -> Unit)? = null,
+    onSwipeNext: (() -> Unit)? = null,
     onRegionTapped: (TextRegion?) -> Unit
 ) {
     var scale  by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
 
     val transformState = rememberTransformableState { zoomChange, panChange, _ ->
-        scale  = (scale * zoomChange).coerceIn(1f, 4f)
-        offset += panChange
+        val newScale = (scale * zoomChange).coerceIn(1f, 4f)
+        // Avoid pan-vs-swipe conflict at base zoom; allow pan only when zoomed in.
+        if (newScale > 1.02f || scale > 1.02f) {
+            offset += panChange
+        }
+        scale = newScale
+        if (scale <= 1.02f) offset = Offset.Zero
     }
 
     Box(
@@ -375,6 +419,38 @@ private fun ZoomableImage(
                         onRegionTapped(null)
                     }
                 )
+            }
+            .pointerInput(onSwipePrevious, onSwipeNext, scale) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val down = awaitPointerEvent().changes.firstOrNull() ?: continue
+                        if (!down.pressed) continue
+
+                        var totalX = 0f
+                        var totalY = 0f
+                        var pointerActive = true
+
+                        while (pointerActive) {
+                            val event = awaitPointerEvent()
+                            val changes = event.changes
+                            if (changes.isEmpty()) break
+
+                            val activeChange = changes.first()
+                            if (!activeChange.pressed) {
+                                pointerActive = false
+                                break
+                            }
+
+                            val delta = activeChange.position - activeChange.previousPosition
+                            totalX += delta.x
+                            totalY += delta.y
+                        }
+
+                        if (scale <= 1.02f && abs(totalX) > 80f && abs(totalX) > abs(totalY) * 1.4f) {
+                            if (totalX > 0f) onSwipePrevious?.invoke() else onSwipeNext?.invoke()
+                        }
+                    }
+                }
             }
     ) {
         // Image layer

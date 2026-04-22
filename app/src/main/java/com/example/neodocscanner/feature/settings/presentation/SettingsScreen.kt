@@ -9,10 +9,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Card
@@ -56,6 +58,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 @Composable
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
+    onOpenFieldExtractorDebug: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val prefs by viewModel.preferences.collectAsStateWithLifecycle()
@@ -135,6 +138,22 @@ fun SettingsScreen(
                 }
 
                 item { Spacer(modifier = Modifier.height(16.dp)) }
+
+                // ── Diagnostics ────────────────────────────────────────────────
+                item {
+                    SettingsSectionHeader(
+                        title = "Diagnostics",
+                        icon = Icons.Default.BugReport
+                    )
+                    SettingsCard {
+                        NavRow(
+                            label = "Field Extractor Debug",
+                            description = "Paste OCR text and inspect extracted fields by document class.",
+                            onClick = onOpenFieldExtractorDebug
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
             }
         )
     }
@@ -212,6 +231,32 @@ private fun ToggleRow(
         Switch(
             checked         = checked,
             onCheckedChange = { onToggle() }
+        )
+    }
+}
+
+@Composable
+private fun NavRow(
+    label: String,
+    description: String,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(horizontal = 16.dp, vertical = 14.dp)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }

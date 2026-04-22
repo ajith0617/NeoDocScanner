@@ -2,6 +2,7 @@ package com.example.neodocscanner.feature.vault.data.service.text
 
 import com.example.neodocscanner.core.domain.model.DocumentClass
 import com.example.neodocscanner.core.domain.model.DocumentField
+import java.text.Normalizer
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -123,7 +124,7 @@ class DocumentFieldExtractorService @Inject constructor() {
             fields += DocumentField(label = "District", value = distMatch.groupValues[1].trim())
         }
 
-        return fields
+        return normalizePassportNameFields(fields)
     }
 
     private fun findAadhaarUID(text: String): String? {
@@ -386,41 +387,44 @@ class DocumentFieldExtractorService @Inject constructor() {
     // =========================================================================
 
     private fun extractVoterID(text: String): List<DocumentField> {
-        val lines    = voterIDCleanLines(text)
+        val lines     = voterIDCleanLines(text)
         val fullClean = lines.joinToString("\n")
-        val normed   = normaliseDigits(fullClean)
+        val normed    = normaliseDigits(fullClean)
 
         val fields = mutableListOf<DocumentField>()
 
-        // EPIC Number
-        val epic = voterIDExtractEPIC(lines, normed)
-        if (epic != null) fields += DocumentField(label = "EPIC Number", value = epic)
-
-        // Voter Name
-        val name = voterIDExtractVoterName(lines, fullClean)
-        if (name != null) fields += DocumentField(label = "Name", value = name)
-
-        // Guardian
-        val guardian = voterIDExtractGuardian(lines)
-        if (guardian != null) {
-            fields += DocumentField(label = "Guardian Relation", value = guardian.first)
-            fields += DocumentField(label = "Guardian Name",     value = guardian.second)
+        // Elector's name first (plain "Name:" only as fallback when elector wording is absent).
+        val electorName = voterIDExtractElectorName(lines)
+        if (electorName != null) {
+            fields += DocumentField(label = "Name / Elector's Name", value = electorName)
         }
 
-        // Gender
-        val gender = voterIDExtractGender(lines)
-        if (gender != null) fields += DocumentField(label = "Gender", value = gender)
+        val epic = voterIDExtractEPIC(lines, normed)
+        if (epic != null) fields += DocumentField(label = "EPIC No.", value = epic)
 
-        // DOB / Age
+        val guardian = voterIDExtractGuardian(lines, electorName)
+        if (guardian != null) {
+            when (guardian.first) {
+                "Father"  -> fields += DocumentField(label = "Father's Name",  value = guardian.second)
+                "Mother"  -> fields += DocumentField(label = "Mother's Name",  value = guardian.second)
+                "Husband" -> fields += DocumentField(label = "Husband's Name", value = guardian.second)
+                else -> {
+                    fields += DocumentField(label = "Guardian Relation", value = guardian.first)
+                    fields += DocumentField(label = "Guardian Name",   value = guardian.second)
+                }
+            }
+        }
+
         val dobAge = voterIDExtractDOB(lines, fullClean)
-        if (dobAge.first != null)  fields += DocumentField(label = "Date of Birth", value = dobAge.first!!)
-        if (dobAge.second != null) fields += DocumentField(label = "Age",           value = dobAge.second!!)
+        if (dobAge.first != null)  fields += DocumentField(label = "DOB", value = dobAge.first!!)
+        if (dobAge.second != null) fields += DocumentField(label = "Age", value = dobAge.second!!)
 
-        // Address
+        val gender = voterIDExtractGender(lines)
+        if (gender != null) fields += DocumentField(label = "Sex", value = gender)
+
         val address = voterIDExtractAddress(lines)
         if (address != null) fields += DocumentField(label = "Address", value = address)
 
-        // Assembly Constituency
         val constituency = detectLabeledValue("assembly\\s+constituency|ac\\s+name", fullClean)
         if (constituency != null) fields += DocumentField(label = "Assembly Constituency", value = constituency)
 
@@ -463,65 +467,226 @@ class DocumentFieldExtractorService @Inject constructor() {
         return firstMatch(VOTER_ID_EPIC_REGEX, normed)
     }
 
-    private fun voterIDExtractVoterName(lines: List<String>, fullText: String): String? {
-        // Label-based: "Elector's Name:" / "Name:"
-        for ((i, line) in lines.withIndex()) {
-            if (!Regex(VOTER_ID_NAME_LABEL, RegexOption.IGNORE_CASE).containsMatchIn(line)) continue
-            // Inline value
-            val colonIdx = line.indexOf(':')
-            if (colonIdx >= 0) {
-                val inline = line.substring(colonIdx + 1).trim()
-                if (inline.length >= 2) return inline.let { capitalise(it) }
+    /**
+     * Voter display name must follow the elector line when the card labels it;
+     * plain "Name:" is used only when no elector-specific label exists.
+     * No ALL-CAPS heuristic — it often picks the wrong line on noisy OCR.
+     */
+    private fun voterIDExtractElectorName(lines: List<String>): String? {
+        fun continuationFrom(startIdx: Int): String? {
+            for (j in (startIdx + 1) until minOf(startIdx + 15, lines.size)) {
+                if (voterIDIsSkippableMetadataLine(lines[j])) continue
+                voterIDNormaliseNameValue(lines[j])?.let { return it }
             }
-            // Next-line value
-            if (i + 1 < lines.size) {
-                val next = lines[i + 1].trim()
-                if (next.isNotEmpty() && !Regex(VOTER_ID_NAME_STOP, RegexOption.IGNORE_CASE).containsMatchIn(next)) {
-                    return capitalise(next)
-                }
-            }
+            return null
         }
-        // ALL-CAPS fallback
-        return extractAllCapsNames(fullText, 1, listOf("election", "commission", "voter", "epic", "identity", "card")).firstOrNull()
+        for ((i, line) in lines.withIndex()) {
+            if (!Regex(VOTER_ID_ELECTOR_NAME_LABEL_DETECT, RegexOption.IGNORE_CASE).containsMatchIn(line)) continue
+            voterIDNormaliseNameValue(line)?.let { return it }
+            continuationFrom(i)?.let { return it }
+        }
+        // "Electors" / "Elector" alone on a line, then "Namme"/"Name" fragments — name appears after EPIC etc.
+        for ((i, line) in lines.withIndex()) {
+            if (!Regex("""(?i)^\s*electors?\s*$""").matches(line.trim())) continue
+            continuationFrom(i)?.let { return it }
+        }
+        for ((i, line) in lines.withIndex()) {
+            if (!Regex(VOTER_ID_GENERIC_NAME_LABEL_DETECT, RegexOption.IGNORE_CASE).containsMatchIn(line)) continue
+            if (Regex(VOTER_ID_ELECTOR_NAME_LABEL_DETECT, RegexOption.IGNORE_CASE).containsMatchIn(line)) continue
+            voterIDNormaliseNameValue(line)?.let { return it }
+            continuationFrom(i)?.let { return it }
+        }
+        return null
     }
 
-    private fun voterIDExtractGuardian(lines: List<String>): Pair<String, String>? {
-        val guardianPatterns = listOf(
-            Regex("""(?i)fa[rt]her'?[cs]?\s+(?:name|lame)\s*:?\s*"""),
-            Regex("""(?i)mother'?s?\s+name\s*:?\s*"""),
-            Regex("""(?i)husband'?s?\s+name\s*:?\s*"""),
-            Regex("""(?i)\bS/O\b\s*:?\s*"""),
-            Regex("""(?i)\bW/O\b\s*:?\s*"""),
-            Regex("""(?i)\bD/O\b\s*:?\s*"""),
-            Regex("""(?i)\bH/O\b\s*:?\s*""")
-        )
-        val relations = listOf("Father", "Mother", "Husband", "S/O", "W/O", "D/O", "H/O")
+    /**
+     * Keeps any Unicode letter, strips combining marks (ä → a), drops other symbols.
+     * OCR often outputs accented Latin on Indian cards; plain [A-Za-z] would break names.
+     */
+    private fun voterIDLatinLettersOnly(raw: String): String {
+        val nfd = Normalizer.normalize(raw, Normalizer.Form.NFD).replace(Regex("""\p{Mn}+"""), "")
+        return nfd.replace(Regex("""[^\p{L}\s]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+    }
 
-        for ((patIdx, pattern) in guardianPatterns.withIndex()) {
-            for ((i, line) in lines.withIndex()) {
-                val match = pattern.find(line) ?: continue
-                // Inline value
-                val afterMatch = line.substring(match.range.last + 1).trim()
-                if (afterMatch.length >= 2) {
-                    return Pair(relations.getOrElse(patIdx) { "Guardian" }, capitalise(afterMatch))
-                }
-                // Next line
-                if (i + 1 < lines.size) {
-                    val next = lines[i + 1].trim()
-                    if (next.isNotEmpty()) {
-                        return Pair(relations.getOrElse(patIdx) { "Guardian" }, capitalise(next))
-                    }
-                }
+    /** Lines that are headings / noise between a label and the handwritten or printed name. */
+    private fun voterIDIsSkippableMetadataLine(raw: String): Boolean {
+        val t = raw.trim()
+        if (t.length < 2) return true
+        val compact = t.replace(" ", "")
+        if (Regex("""(?i)^(electors?\s+name|elector'?s?\s+name|fathers?\s+name|fahers?\s+name|fatiers?\s+name|mothers?\s+name|husbands?\s+name|fathers?\s*/\s*mothers?\s*/\s*husbands?\s+name)\s*:?\s*$""").matches(t)) return true
+        if (Regex("""(?i)^(date\s+of\s+birth|year\s+of\s+birth|dob)\s*:?\s*$""").matches(t)) return true
+        if (Regex("""(?i)^(f|fim|fem|fo)\s*/?\s*(sex|gender)?\s*:?\s*$""").matches(t)) return true
+        if (Regex("""(?i)^(?:sex|gender)\s*:?\s*$""").matches(t)) return true
+        if (Regex("""(?i)^(identity\s+card|election\s+commission.*|elector\s+photo.*)$""").matches(t)) return true
+        if (Regex("""^[A-Z]{2,6}\d{5,12}[A-Z0-9]*$""").matches(compact)) return true
+        if (Regex("""(?i)^(pic|epic|spic)$""").matches(t)) return true
+        if (Regex("""(?i)^(nme|namme|name)\s*:?\s*$""").matches(t)) return true
+        if (Regex("""^${VOTER_ID_EPIC_REGEX}$""", RegexOption.IGNORE_CASE).matches(compact)) return true
+        return false
+    }
+
+    /**
+     * Picks guardian/father/husband value when OCR lists elector name first, then relative.
+     */
+    private fun voterIDPickDistinctGuardian(candidates: List<String>, electorName: String?): String? {
+        if (candidates.isEmpty()) return null
+        val en = (electorName?.trim()?.lowercase() ?: "")
+            .replace(Regex("""\s+"""), " ")
+            .replace(".", "")
+        fun norm(s: String) = s.lowercase().replace(Regex("""\s+"""), " ").replace(".", "")
+        if (en.isBlank()) return candidates.first()
+        return candidates.firstOrNull { norm(it) != norm(en) } ?: candidates.first()
+    }
+
+    private fun voterIDCollectGuardianValues(fromLineIdx: Int, lines: List<String>): List<String> {
+        val out = ArrayList<String>()
+        for (j in (fromLineIdx + 1) until minOf(fromLineIdx + 15, lines.size)) {
+            if (voterIDIsSkippableMetadataLine(lines[j])) continue
+            voterIDNormaliseGuardianValue(lines[j])?.let { out.add(it) }
+        }
+        return out
+    }
+
+    /**
+     * Single-line voter names: initials (H. Raghukurmar), two+ tokens, or one long token (SUBHASHCHANDRA).
+     */
+    private fun voterIDFinalisePersonName(lettersOnly: String, minScore: Double = 0.10): String? {
+        if (lettersOnly.length < 2) return null
+        val parts = lettersOnly.split(" ").filter { it.isNotEmpty() }
+        if (parts.size >= 2 && parts[0].length == 1 && parts[0].first().isLetter()) {
+            val rest = parts.drop(1).joinToString(" ").trim()
+            if (rest.isNotEmpty() && rest.all { it.isLetter() || it.isWhitespace() }) {
+                val candidate = "${parts[0].first().uppercaseChar()}. ${capitalise(rest)}"
+                if (indianNameScore(candidate) >= minScore) return candidate
+            }
+        }
+        val letterWords = parts.filter { w -> w.isNotEmpty() && w.all { it.isLetter() } && w.length >= 2 }
+        if (letterWords.size >= 2) {
+            val candidate = capitalise(letterWords.joinToString(" "))
+            if (indianNameScore(candidate) >= minScore) return candidate
+        }
+        if (letterWords.size == 1 && letterWords[0].length >= 4) {
+            val w = letterWords[0]
+            val candidate = capitalise(w)
+            if (indianNameScore(candidate) >= minScore) return candidate
+            // Long single-token names (common on voter IDs) exceed indianNameScore's 15-char word cap.
+            if (w.length in 6..28 && w.all { it.isLetter() } && !NAME_BLACKLIST.contains(w.lowercase())) {
+                return candidate
             }
         }
         return null
     }
 
+    /**
+     * Cleans OCR name fragments so we don't return label text like "Electors name".
+     */
+    private fun voterIDNormaliseNameValue(raw: String): String? {
+        val withoutLabel = Regex(VOTER_ID_NAME_LABEL_STRIP, RegexOption.IGNORE_CASE).replace(raw, "")
+            .replace(":", " ")
+            .trim()
+        if (withoutLabel.length < 2) return null
+        if (Regex(VOTER_ID_NAME_LABEL_ONLY, RegexOption.IGNORE_CASE).matches(withoutLabel)) return null
+        if (Regex(VOTER_ID_NAME_STOP, RegexOption.IGNORE_CASE).containsMatchIn(withoutLabel)) return null
+        val lettersOnly = voterIDLatinLettersOnly(withoutLabel)
+        if (lettersOnly.length < 2) return null
+        if (Regex(VOTER_ID_NAME_LABEL_ONLY, RegexOption.IGNORE_CASE).matches(lettersOnly)) return null
+        if (Regex(VOTER_ID_NAME_STOP, RegexOption.IGNORE_CASE).containsMatchIn(lettersOnly)) return null
+        return voterIDFinalisePersonName(lettersOnly, minScore = 0.10)
+    }
+
+    /** Father value split across two OCR lines (e.g. "Venkateswarlu" + "Gundabathin"). */
+    private fun voterIDMergeAdjacentFatherParts(
+        relation: String,
+        merged: List<String>,
+        electorName: String?,
+        chosen: String
+    ): String {
+        if (relation != "Father" || merged.size < 2) return chosen
+        // Merge only when chosen is the first candidate; otherwise we risk joining elector + father.
+        if (merged.first().trim() != chosen.trim()) return chosen
+        val a = merged[0].trim()
+        val b = merged[1].trim()
+        if (a.isEmpty() || b.isEmpty()) return chosen
+        if (a.split(" ").size > 2 || b.split(" ").size != 1) return chosen
+        val join = "$a $b".trim()
+        fun norm(s: String) = s.lowercase().replace(Regex("""\s+"""), " ").replace(".", "")
+        val nJoin = norm(join)
+        val nE = norm(electorName ?: "")
+        if (nE.isNotBlank() && nJoin == nE) return chosen
+        return voterIDNormaliseGuardianValue(join) ?: chosen
+    }
+
+    private fun voterIDExtractGuardian(lines: List<String>, electorName: String?): Pair<String, String>? {
+        val specs = listOf(
+            // Combined relation header appears on some cards: Fathers/Mothers/Husbands Name
+            Regex("""(?i)fathers?\s*/\s*mothers?\s*/\s*husbands?\s+name\s*:?\s*""") to "Husband",
+            // Father / Fahers / Fatiers + optional glued "NAME", typos nane/lame
+            Regex("""(?i)(?:fa[rt]her'?s?|fahers?|fatiers?)\s*(?:names?|(?:name|lame|nane))\s*:?\s*""") to "Father",
+            Regex("""(?i)mother'?s?\s+(?:name|nane)\s*:?\s*""") to "Mother",
+            Regex("""(?i)husband'?s?\s+names?\s*:?\s*(.+)""") to "Husband",
+            Regex("""(?i)husband'?s?\s+names?([A-Za-z][A-Za-z]{2,})\s*$""") to "Husband",
+            // "Rolations Vishwanathan" — garbled **Relation(s)** line (usually father on EPIC cards)
+            Regex("""(?i)(?:re|ro)lations?\s*:?\s*(.+)""") to "Father",
+            Regex("""(?i)\bS/O\b\s*:?\s*""") to "S/O",
+            Regex("""(?i)\bW/O\b\s*:?\s*""") to "W/O",
+            Regex("""(?i)\bD/O\b\s*:?\s*""") to "D/O",
+            Regex("""(?i)\bH/O\b\s*:?\s*""") to "H/O"
+        )
+
+        for ((pattern, relation) in specs) {
+            for ((i, line) in lines.withIndex()) {
+                val match = pattern.find(line) ?: continue
+                val fromCapture = match.groupValues.drop(1).firstOrNull { it.isNotBlank() }?.trim()
+                val tail = line.substring(match.range.last + 1).trim()
+                val inline = sequenceOf(fromCapture, tail.takeIf { it.isNotBlank() })
+                    .filterNotNull()
+                    .mapNotNull { voterIDNormaliseGuardianValue(it) }
+                    .firstOrNull()
+                val scanned = voterIDCollectGuardianValues(i, lines)
+                val merged = buildList {
+                    if (inline != null) add(inline)
+                    addAll(scanned)
+                }.distinct()
+                if (merged.isEmpty()) continue
+                val dedupe = relation in setOf("Father", "Mother", "Husband")
+                val chosen = voterIDPickDistinctGuardian(merged, if (dedupe) electorName else null) ?: continue
+                val valueOut = voterIDMergeAdjacentFatherParts(relation, merged, electorName, chosen)
+                return Pair(relation, valueOut)
+            }
+        }
+        return null
+    }
+
+    private fun voterIDNormaliseGuardianValue(raw: String): String? {
+        val cleaned = Regex(VOTER_ID_GUARDIAN_LABEL_STRIP, RegexOption.IGNORE_CASE).replace(raw, "")
+            .replace(":", " ")
+            .replace("/", " ")
+            .let { voterIDLatinLettersOnly(it) }
+            .trim()
+        if (cleaned.length < 2) return null
+        if (Regex(VOTER_ID_GUARDIAN_STOP, RegexOption.IGNORE_CASE).containsMatchIn(cleaned)) return null
+        return voterIDFinalisePersonName(cleaned, minScore = 0.08)
+    }
+
     private fun voterIDExtractGender(lines: List<String>): String? {
         for (line in lines) {
+            val lower = line.lowercase()
+            // "female" before "male" — avoids matching "male" inside "female".
+            if (Regex("""(?i)\bfemale\b""").containsMatchIn(lower) || "महिला" in line) return "Female"
+            if (Regex("""(?i)\bmale\b""").containsMatchIn(lower) || "पुरुष" in line) return "Male"
             val upper = line.uppercase()
-            if ("FEMALE" in upper || "महिला" in line) return "Female"
-            if ("MALE"   in upper || "पुरुष"   in line) return "Male"
+            if ("FEMALE" in upper) return "Female"
+            if ("MALE" in upper && !Regex("""(?i)female""").containsMatchIn(lower)) return "Male"
+            val labeled = Regex("""(?i)\b(?:sex|gender)\b\s*[:\-]?\s*([MF])\b""")
+                .find(line)?.groupValues?.getOrNull(1)?.uppercase()
+            if (labeled == "F") return "Female"
+            if (labeled == "M") return "Male"
+
+            val token = line.trim().uppercase()
+            if (token == "F" || token == "FEMALE") return "Female"
+            if (token == "M" || token == "MALE") return "Male"
         }
         return null
     }
@@ -530,10 +695,8 @@ class DocumentFieldExtractorService @Inject constructor() {
         var dob: String? = null
         var age: String? = null
 
-        // Labeled DOB
         dob = detectLabeledDate("dob|birth|year|date", fullText)
 
-        // "Age as on" pattern
         val ageAsOnMatch = Regex("""(?i)age\s+as\s+on""").find(fullText)
         if (ageAsOnMatch != null) {
             val ageLineMatch = Regex("""^\d{1,3}$""", RegexOption.MULTILINE).find(
@@ -541,10 +704,26 @@ class DocumentFieldExtractorService @Inject constructor() {
             )
             if (ageLineMatch != null) age = ageLineMatch.value
         }
-        // Inline age
         if (age == null) {
             val inlineAge = Regex("""(?i)age(?:\s+as\s+on[\s\d.:/\-]+?)?\s*:?\s*(\d{1,3})\b""").find(fullText)
             if (inlineAge != null) age = inlineAge.groupValues[1]
+        }
+        if (age == null) {
+            val yearsAge = Regex("""(?i)\b(\d{1,3})\s*years?\b""").find(fullText)
+            if (yearsAge != null) age = yearsAge.groupValues[1]
+        }
+
+        if (dob == null) {
+            val masked = Regex("""(?i)(?:xx|x{2,}|[*]{2,})[/.\-](?:xx|x{2,}|[*]{2,})[/.\-](\d{2,4})\b""").find(fullText)
+            if (masked != null) {
+                var y = masked.groupValues[1].toIntOrNull() ?: 0
+                if (y in 0..99) y += if (y >= 30) 1900 else 2000
+                if (y in 1900..2099) {
+                    val cal = Calendar.getInstance()
+                    cal.set(y, 0, 1)
+                    dob = SimpleDateFormat("d MMM yyyy", Locale.ENGLISH).format(cal.time)
+                }
+            }
         }
 
         if (dob == null) dob = detectFirstDate(fullText)
@@ -603,59 +782,424 @@ class DocumentFieldExtractorService @Inject constructor() {
     // =========================================================================
 
     private fun extractPassport(text: String, backText: String): List<DocumentField> {
-        val combined = if (backText.isNotBlank()) "$text\n$backText" else text
-        val fields   = mutableListOf<DocumentField>()
-
-        // Try MRZ first (confidence 1.0 when check digits pass)
-        val mrz = parseMRZ(combined)
-        if (mrz != null) {
-            if (mrz.surname.isNotEmpty())        fields += DocumentField(label = "Surname",          value = mrz.surname)
-            if (mrz.givenName.isNotEmpty())      fields += DocumentField(label = "Given Name",       value = mrz.givenName)
-            if (mrz.surname.isNotEmpty() && mrz.givenName.isNotEmpty())
-                                                  fields += DocumentField(label = "Name",             value = "${mrz.givenName} ${mrz.surname}")
-            fields += DocumentField(label = "Passport Number",  value = mrz.passportNumber)
-            fields += DocumentField(label = "Date of Birth",    value = mrz.dateOfBirth)
-            fields += DocumentField(label = "Date of Expiry",   value = mrz.dateOfExpiry)
-            fields += DocumentField(label = "Sex",              value = mrz.sex)
-        } else {
-            // Regex fallback
-            val passNum = detectPassportNumber(normaliseDigits(combined))
-            if (passNum != null) fields += DocumentField(label = "Passport Number", value = passNum)
-
-            val surname   = detectLabeledValue("sur[nm]ame|sumname", combined)
-            val givenName = detectLabeledValue("given\\s*name", combined)
-            val name      = when {
-                surname != null && givenName != null -> "$givenName $surname"
-                surname != null                      -> surname
-                givenName != null                    -> givenName
-                else                                 -> null
-            }
-            if (name   != null) fields += DocumentField(label = "Name",       value = name)
-            if (surname   != null) fields += DocumentField(label = "Surname",  value = surname)
-            if (givenName != null) fields += DocumentField(label = "Given Name", value = givenName)
-
-            val dob = detectLabeledDate("date\\s+of\\s+birth|dob", combined)
-            if (dob != null) fields += DocumentField(label = "Date of Birth", value = dob)
-
-            val expiry = detectLabeledDate("date\\s+of\\s+expir[yi]|date\\s+at\\s+expir|date\\s+of\\s+issue|expiry", combined)
-            if (expiry != null) fields += DocumentField(label = "Date of Expiry", value = expiry)
-
-            val nationality = detectLabeledValue("nationalit", combined)
-            if (nationality != null) fields += DocumentField(label = "Nationality", value = nationality)
-
-            val placeOfBirth = detectLabeledValue("place\\s+of\\s+birth", combined)
-            if (placeOfBirth != null) fields += DocumentField(label = "Place of Birth", value = placeOfBirth)
-
-            val placeOfIssue = detectLabeledValue("place\\s+of\\s+(i[sl]su[ae]?|issue|lssua|lusua)", combined)
-            if (placeOfIssue != null) fields += DocumentField(label = "Place of Issue", value = placeOfIssue)
-
-            val sex = Regex("""\bsex\b|sua\b""", RegexOption.IGNORE_CASE).find(combined)?.let {
-                detectLabeledValue("sex", combined)
-            }
-            if (sex != null) fields += DocumentField(label = "Sex", value = sex)
+        val frontText = text
+        val backOnlyText = backText
+        val combined = if (backOnlyText.isNotBlank()) "$frontText\n$backOnlyText" else frontText
+        val fields = mutableListOf<DocumentField>()
+        val seenLabels = mutableSetOf<String>()
+        val frontLooksLikeBackPage = isLikelyPassportBackPage(frontText)
+        fun samePassportNamePart(a: String?, b: String?): Boolean {
+            if (a.isNullOrBlank() || b.isNullOrBlank()) return false
+            fun norm(value: String): String = value.lowercase().replace('0', 'o').replace(Regex("""[^a-z]"""), "")
+            return norm(a).isNotBlank() && norm(a) == norm(b)
         }
 
-        return fields
+        fun addField(label: String, value: String?) {
+            val clean = sanitizePassportFieldValue(label, value) ?: return
+            if (seenLabels.add(label)) fields += DocumentField(label = label, value = clean)
+        }
+
+        // ── Front page preferred fields ───────────────────────────────────────
+        val mrz = parseMRZ(frontText) ?: parseMRZ(combined)
+        if (mrz != null) {
+            val surname = sanitizePassportFieldValue("Surname", mrz.surname.takeIf { it.isNotEmpty() })
+            val givenName = sanitizePassportFieldValue("Given Name", mrz.givenName.takeIf { it.isNotEmpty() })
+            addField("Surname", surname)
+            addField("Given Name", givenName)
+            if (surname != null && givenName != null) {
+                addField("Name", "$givenName $surname")
+            }
+            addField("Passport Number", mrz.passportNumber)
+            addField("Country Code", mrz.countryCode.takeIf { it.isNotEmpty() })
+            addField("Date of Birth", mrz.dateOfBirth)
+            addField("Date of Expiry", mrz.dateOfExpiry)
+            addField("Sex", mrz.sex)
+        } else {
+            addField("Passport Number", detectPassportNumber(normaliseDigits(frontText)))
+            val surname = sanitizePassportFieldValue(
+                "Surname",
+                detectPassportLabeledValue(frontText, "sur[nm]ame|sumname|surnarne")
+            )
+            val givenName = sanitizePassportFieldValue(
+                "Given Name",
+                detectPassportLabeledValue(frontText, "g[i1l]ven\\s*name(?:\\s*\\(s\\)|s|ls?|[o0])?")
+            )
+            val heuristicName = if (!frontLooksLikeBackPage) detectPassportHeuristicName(frontText) else null
+            val name = when {
+                surname != null && givenName != null -> "$givenName $surname"
+                givenName != null -> givenName
+                heuristicName != null && !samePassportNamePart(heuristicName, surname) -> heuristicName
+                else -> null
+            }
+            addField("Name", name)
+            addField("Surname", surname)
+            addField("Given Name", givenName)
+            addField("Nationality", detectPassportLabeledValue(frontText, "nationalit"))
+            addField("Sex", detectLabeledValue("sex|gender", frontText))
+            addField("Date of Birth", detectLabeledDate("date\\s+of\\s+birth|dob", frontText))
+            addField("Place of Birth", detectPassportLabeledValue(frontText, "place\\s+of\\s+birth"))
+            addField("Place of Issue", detectPassportLabeledValue(frontText, "place\\s+of\\s+(i[sl]su[ae]?|issue|lssua|lusua)"))
+            addField("Date of Issue", detectLabeledDate("date\\s+of\\s+issue|issue\\s+date", frontText))
+            addField("Date of Expiry", detectLabeledDate("date\\s+of\\s+expir[yi]|date\\s+at\\s+expir|expiry", frontText))
+        }
+
+        // Ensure front list still has expiry/issue/nationality even when MRZ path was used.
+        addField("Nationality", detectPassportLabeledValue(frontText, "nationalit"))
+        addField("Place of Birth", detectPassportLabeledValue(frontText, "place\\s+of\\s+birth"))
+        addField("Place of Issue", detectPassportLabeledValue(frontText, "place\\s+of\\s+(i[sl]su[ae]?|issue|lssua|lusua)"))
+        addField("Date of Issue", detectLabeledDate("date\\s+of\\s+issue|issue\\s+date", frontText))
+        if (!seenLabels.contains("Date of Expiry")) {
+            addField("Date of Expiry", detectLabeledDate("date\\s+of\\s+expir[yi]|date\\s+at\\s+expir|expiry", frontText))
+        }
+
+        // ── Back page fields ───────────────────────────────────────────────────
+        val backScope = if (backOnlyText.isNotBlank()) backOnlyText else combined
+        addField(
+            "Name of Father/Legal Guardian",
+            detectPassportLabeledValue(
+                backScope,
+                "name\\s+of\\s+fat(?:h|b)er(?:\\s*/\\s*legal\\s+guardian)?|father(?:\\s*/\\s*legal\\s+guardian)?|legal\\s+guardian"
+            )
+        )
+        addField("Name of Mother", detectPassportLabeledValue(backScope, "name\\s+of\\s+mother|mother"))
+        addField("Address", detectPassportBackAddress(backScope))
+
+        // Back passport number is often printed near barcode block.
+        val backPassport = detectPassportNumberNearBarcode(backScope)
+            ?: detectPassportNumber(normaliseDigits(backScope))
+            ?: detectPassportNumber(normaliseDigits(combined))
+        if (!seenLabels.contains("Passport Number")) {
+            addField("Passport Number", backPassport)
+        }
+
+        return normalizePassportNameFields(fields)
+    }
+
+    private fun detectPassportNumberNearBarcode(text: String): String? {
+        val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val passportRegex = Regex("""\b([A-Z])\s*[-]?\s*(\d{7})\b""")
+        val barcodeHint = Regex("""(?i)(barcode|bar\s*code|2d|pdf417|qr)""")
+
+        for (i in lines.indices) {
+            if (!barcodeHint.containsMatchIn(lines[i])) continue
+            val start = (i - 2).coerceAtLeast(0)
+            val end = (i + 6).coerceAtMost(lines.lastIndex)
+            for (j in start..end) {
+                val match = passportRegex.find(lines[j].uppercase()) ?: continue
+                return match.groupValues[1] + match.groupValues[2]
+            }
+        }
+        return null
+    }
+
+    private fun isLikelyPassportBackPage(text: String): Boolean {
+        val lower = text.lowercase()
+        val hasGuardianSignals =
+            lower.contains("father") ||
+                lower.contains("mother") ||
+                lower.contains("legal guardian") ||
+                lower.contains("guardian")
+        val hasAddressSignal = lower.contains("address")
+        val hasMrz = lower.contains("<<")
+        return (hasGuardianSignals || hasAddressSignal) && !hasMrz
+    }
+
+    private fun sanitizePassportFieldValue(label: String, raw: String?): String? {
+        if (raw.isNullOrBlank()) return null
+        var value = raw
+            .replace(Regex("""\s+"""), " ")
+            .trim(' ', ':', '-', ',', '.', ';')
+
+        // Trim trailing fragments when OCR line merges multiple labels.
+        value = Regex(
+            """(?i)\b(place\s+of\s+issue|place\s+of\s+birth|date\s+of\s+issue|date\s+of\s+expiry|date\s+of\s+birth|sex|gender|nationality|country\s+code|passport\s*(?:no|number)|name\s+of\s+father|name\s+of\s+mother|address|legal\s+guardian)\b"""
+        ).split(value).firstOrNull()?.trim().orEmpty()
+
+        if (value.length < 2) return null
+
+        val lower = value.lowercase()
+        val normalized = lower
+            .replace(Regex("""[^a-z0-9]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+        val isKeywordOnly = Regex(
+            """(?i)^(name|surname|given\s*name|nationality|sex|gender|place\s+of\s+issue|place\s+of\s+birth|date\s+of\s+issue|date\s+of\s+expiry|date\s+of\s+birth|country\s+code|passport(?:\s*(?:no|number))?|address|name\s+of\s+father(?:/legal\s+guardian)?|name\s+of\s+mother|father|mother|legal\s+guardian)$"""
+        ).matches(value)
+        if (isKeywordOnly) return null
+
+        val passportKeywords = listOf(
+            "republic of india",
+            "type",
+            "country code",
+            "given name",
+            "name",
+            "nationality",
+            "sex",
+            "place",
+            "place of birth",
+            "place of issue",
+            "issue",
+            "date",
+            "date of",
+            "date of expiry",
+            "name of mother",
+            "guardian",
+            "address",
+            "file no",
+            "passport no",
+            "passport number"
+        )
+
+        return when (label) {
+            "Sex" -> {
+                val token = lower.replace(Regex("""[^a-z]"""), "")
+                when {
+                    token.startsWith("m") || token == "male" -> "Male"
+                    token.startsWith("f") || token == "female" -> "Female"
+                    else -> null
+                }
+            }
+            "Place of Birth" -> {
+                // Avoid wrong mapping like "country code" / 3-letter country token.
+                val clean = value.replace(Regex("""\s+"""), " ").trim()
+                if (lower.contains("country code")) null
+                else if (Regex("""^[A-Z]{2,3}$""").matches(clean.uppercase())) null
+                else if (detectFirstDate(clean) != null) null
+                else if (!Regex("""^[A-Za-z ]+$""").matches(clean)) null
+                else clean
+            }
+            "Place of Issue" -> {
+                val clean = value.replace(Regex("""\s+"""), " ").trim()
+                val norm = lower.replace(Regex("""[^a-z]"""), " ").replace(Regex("""\s+"""), " ").trim()
+                if (norm == "issue" || norm == "place of issue" || detectFirstDate(clean) != null) null
+                else if (!Regex("""^[A-Za-z ]+$""").matches(clean)) null
+                else clean
+            }
+            "Date of Birth", "Date of Issue", "Date of Expiry" -> {
+                detectFirstDate(value)
+            }
+            "Name of Father/Legal Guardian" -> {
+                if (looksLikePassportRelativeLabelEcho(value)) null else value
+            }
+            "Name of Mother" -> {
+                if (looksLikePassportRelativeLabelEcho(value)) null else value
+            }
+            "Name of Spouse" -> {
+                if (looksLikePassportRelativeLabelEcho(value)) null else value
+            }
+            "Address" -> {
+                val norm = lower.replace(Regex("""[^a-z]"""), " ").replace(Regex("""\s+"""), " ").trim()
+                if (norm.contains("name of spouse") || norm == "address") null else value
+            }
+            "Name", "Surname", "Given Name" -> {
+                if (value.contains("/") || value.contains("\\")) return null
+                if (Regex("""(?i)^[a-z]\s*/\s*[a-z].*""").containsMatchIn(value)) return null
+                val keywordLike = passportKeywords.any { k -> normalized == k || normalized.contains(k) }
+                val hasCountryCodeLike = (
+                    normalized.contains("country") && normalized.contains("code")
+                    ) || (
+                    // OCR typo tolerance: "couniry code", "countrv code", etc.
+                    Regex("""\bcoun\w{2,5}\s+code\b""").containsMatchIn(normalized)
+                    )
+                val startsWithSingleToken = Regex("""^[a-z]{1,2}\s+.*""").matches(normalized)
+                val hasIndianStateName = containsIndianStateInPersonField(normalized)
+                if (keywordLike || hasCountryCodeLike || startsWithSingleToken || hasIndianStateName) null
+                else value.replace('0', 'O')
+            }
+            else -> value
+        }
+    }
+
+    private fun containsIndianStateInPersonField(normalized: String): Boolean {
+        if (normalized.isBlank()) return false
+        return INDIAN_STATES.any { state ->
+            normalized == state || normalized.contains(state)
+        }
+    }
+
+    private fun detectPassportLabeledValue(text: String, label: String): String? {
+        val labelRegex = Regex(label, RegexOption.IGNORE_CASE)
+        val lines = text.lines().map { it.trim() }
+        for ((i, line) in lines.withIndex()) {
+            val match = labelRegex.find(line) ?: continue
+            val inline = line.substring(match.range.last + 1)
+                .replace(Regex("""^[\s:;/\\\-._]+"""), "")
+                .trim()
+            if (
+                inline.length >= 2 &&
+                !looksLikePassportLabelLine(inline) &&
+                !looksLikePassportRelativeLabelEcho(inline)
+            ) return inline
+
+            for (j in (i + 1)..minOf(i + 3, lines.lastIndex)) {
+                val next = lines[j]
+                    .replace(Regex("""^[\s:;/\\\-._]+"""), "")
+                    .trim()
+                if (next.length < 2) continue
+                if (looksLikePassportLabelLine(next)) continue
+                if (looksLikePassportRelativeLabelEcho(next)) continue
+                return next
+            }
+        }
+        return null
+    }
+
+    private fun detectPassportBackAddress(text: String): String? {
+        val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val idx = lines.indexOfFirst { Regex("""(?i)\baddress\b""").containsMatchIn(it) }
+        if (idx < 0) return null
+
+        val stopRegex = Regex(
+            """(?i)(name\s+of\s+spouse|spouse|file\s*no|passport\s*(?:no|number)|name\s+of\s+mother|name\s+of\s+father|legal\s+guardian|date|issue|place)"""
+        )
+        val parts = mutableListOf<String>()
+        val inline = lines[idx]
+            .replace(Regex("""(?i).*?\baddress\b\s*[:\-]?\s*"""), "")
+            .trim()
+        if (inline.isNotBlank() && !looksLikePassportLabelLine(inline) && !stopRegex.containsMatchIn(inline)) {
+            parts += inline
+        }
+        for (i in (idx + 1)..minOf(idx + 6, lines.lastIndex)) {
+            val line = lines[i]
+            if (stopRegex.containsMatchIn(line) && !line.contains("pin", ignoreCase = true)) break
+            if (looksLikePassportLabelLine(line)) continue
+            parts += line
+        }
+        return parts.joinToString(", ").takeIf { it.isNotBlank() }
+    }
+
+    private fun detectPassportHeuristicName(text: String): String? {
+        val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val passportMetaLabel = Regex(
+            """(?i)(surname|sur[nm]ame|sumname|surnarne|g[i1l]ven\s*name|nationalit|country\s+code|place\s+of\s+birth|place\s+of\s+issue|date\s+of\s+(birth|issue|expiry)|sex|gender|type|passport\s*(?:no|number))"""
+        )
+
+        for (index in lines.indices) {
+            val line = lines[index]
+            val previous = lines.getOrNull(index - 1).orEmpty()
+            if (passportMetaLabel.containsMatchIn(line) || passportMetaLabel.containsMatchIn(previous)) continue
+            if (looksLikePassportLabelLine(line)) continue
+            if (detectFirstDate(line) != null) continue
+            if (Regex("""\b[A-Z]\d{7}\b""").containsMatchIn(line.uppercase())) continue
+
+            val clean = line.replace(Regex("""\s+"""), " ").trim()
+            if (!Regex("""^[A-Za-z ]+$""").matches(clean)) continue
+
+            val normalized = clean.lowercase()
+                .replace(Regex("""[^a-z]"""), " ")
+                .replace(Regex("""\s+"""), " ")
+                .trim()
+            if (containsIndianStateInPersonField(normalized)) continue
+
+            val words = clean.split(" ").filter { it.isNotBlank() }
+            if (words.size !in 1..4) continue
+            if (words.any { it.length < 2 }) continue
+
+            return clean
+        }
+        return null
+    }
+
+    private fun looksLikePassportRelativeLabelEcho(value: String): Boolean {
+        val normalized = value.lowercase()
+            .replace(Regex("""[^a-z]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+
+        if (normalized.isBlank()) return true
+        if (normalized == "father" || normalized == "mother" || normalized == "spouse" || normalized == "guardian") {
+            return true
+        }
+        if (normalized == "name of mother" || normalized == "name of spouse") return true
+        if (Regex("""^(?:name of )?(?:father )?(?:legal )?guard[a-z]+$""").matches(normalized)) return true
+        return false
+    }
+
+    private fun looksLikePassportLabelLine(value: String): Boolean {
+        val normalized = value.lowercase()
+            .replace(Regex("""[^a-z0-9]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+        if (normalized.isBlank()) return true
+        val labels = listOf(
+            "republic of india", "type", "country code", "given name", "name", "surname",
+            "nationality", "sex", "place", "place of birth", "place of issue", "issue",
+            "date", "date of", "date of expiry", "name of mother", "name of father",
+            "legal guardian", "guardian", "address", "file no", "passport no", "passport number"
+        )
+        return labels.any { normalized == it || normalized.startsWith("$it ") }
+    }
+
+    private fun normalizePassportNameFields(fields: List<DocumentField>): List<DocumentField> {
+        if (fields.isEmpty()) return fields
+
+        val byLabel = fields.associateBy({ it.label }, { it.value }).toMutableMap()
+        var name = byLabel["Name"]?.trim().orEmpty()
+        var surname = byLabel["Surname"]?.trim().orEmpty()
+        var given = byLabel["Given Name"]?.trim().orEmpty()
+
+        fun norm(v: String): String = v.lowercase().replace(Regex("""[^a-z]"""), "")
+
+        val nameNorm = norm(name)
+        val surnameNorm = norm(surname)
+        val givenNorm = norm(given)
+
+        // Name and surname should never be identical.
+        if (nameNorm.isNotBlank() && nameNorm == surnameNorm) {
+            if (given.isNotBlank() && norm(given) != surnameNorm) {
+                name = given
+            } else {
+                // Keep surname, drop duplicated full-name copy.
+                name = surname
+            }
+        }
+
+        // If only Name + Surname are present, treat Name as Given Name and rebuild full Name.
+        if (given.isBlank() && name.isNotBlank() && surname.isNotBlank() && norm(name) != norm(surname)) {
+            given = name
+            name = "$given $surname".trim()
+        }
+
+        // If Given and Surname accidentally become identical, do not keep both.
+        if (given.isNotBlank() && surname.isNotBlank() && norm(given) == norm(surname)) {
+            // Prefer surname as-is and clear duplicate given name.
+            given = ""
+            if (name.isBlank() || norm(name) == norm(surname)) {
+                name = surname
+            }
+        }
+
+        // Final invariant: Name and Surname must not be identical.
+        if (name.isNotBlank() && surname.isNotBlank() && norm(name) == norm(surname)) {
+            if (given.isNotBlank() && norm(given) != norm(surname)) {
+                // Rebuild full name from distinct given + surname.
+                name = "$given $surname".trim()
+            } else {
+                // Keep surname, move duplicate "Name" as Given Name fallback and drop Name.
+                if (given.isBlank()) given = name
+                name = ""
+            }
+        }
+
+        val normalizedMap = byLabel.toMutableMap()
+        if (name.isNotBlank()) normalizedMap["Name"] = name else normalizedMap.remove("Name")
+        if (surname.isNotBlank()) normalizedMap["Surname"] = surname else normalizedMap.remove("Surname")
+        if (given.isNotBlank()) normalizedMap["Given Name"] = given else normalizedMap.remove("Given Name")
+
+        val normalizedFields = fields
+            .mapNotNull { field ->
+                val v = normalizedMap[field.label] ?: return@mapNotNull null
+                DocumentField(label = field.label, value = v)
+            }
+            .distinctBy { it.label }
+
+        // Absolute safety net: never return Name and Surname with identical values.
+        val nameValue = normalizedFields.firstOrNull { it.label == "Name" }?.value
+        val surnameValue = normalizedFields.firstOrNull { it.label == "Surname" }?.value
+        if (!nameValue.isNullOrBlank() && !surnameValue.isNullOrBlank() && norm(nameValue) == norm(surnameValue)) {
+            return normalizedFields.filterNot { it.label == "Name" }
+        }
+        return normalizedFields
     }
 
     // ── ICAO TD3 MRZ Parser ───────────────────────────────────────────────────
@@ -683,6 +1227,7 @@ class DocumentFieldExtractorService @Inject constructor() {
             val passRaw   = l2.substring(0, 8)
             val passCheck = l2[8]
             val passNum   = passRaw.replace("<", "")
+            val countryCode = l2.substring(10, 13).replace("<", "")
 
             // DOB (13–18), check digit at 19
             val dobRaw   = l2.substring(13, 19)
@@ -707,6 +1252,7 @@ class DocumentFieldExtractorService @Inject constructor() {
                 surname        = surname,
                 givenName      = given,
                 passportNumber = passNum,
+                countryCode    = countryCode,
                 dateOfBirth    = dobStr,
                 dateOfExpiry   = expStr,
                 sex            = sex,
@@ -719,6 +1265,7 @@ class DocumentFieldExtractorService @Inject constructor() {
     private data class MRZResult(
         val surname: String, val givenName: String,
         val passportNumber: String,
+        val countryCode: String,
         val dateOfBirth: String, val dateOfExpiry: String,
         val sex: String,
         val allCheckDigitsOK: Boolean
@@ -873,8 +1420,19 @@ class DocumentFieldExtractorService @Inject constructor() {
     fun detectDLNumber(text: String): String? =
         firstMatch("""\b[A-Z]{2}\d{2}[\s-]?\d{4}[\s-]?\d{7}\b""", text)
 
-    fun detectPassportNumber(text: String): String? =
-        firstMatch("""\b[A-Z]\d{7}\b""", text)
+    /**
+     * Passport number format: 1 alphabet + 7 digits (e.g. A1234567).
+     *
+     * We intentionally return the FIRST occurring valid match in OCR reading order,
+     * because for Indian passports this is typically the correct number.
+     */
+    fun detectPassportNumber(text: String): String? {
+        val pattern = Regex("""\b([A-Z])\s*[-]?\s*(\d{7})\b""")
+        val first = pattern.find(text) ?: return null
+        val prefix = first.groupValues[1]
+        val digits = first.groupValues[2]
+        return prefix + digits
+    }
 
     fun detectGenericIDNumber(text: String): String? =
         firstMatch("""\b[A-Z]{1,3}[\s-]?\d{6,12}\b""", text)
@@ -1067,9 +1625,21 @@ class DocumentFieldExtractorService @Inject constructor() {
 
         // Voter ID EPIC pattern (iOS: voterIDEPICRegex)
         private const val VOTER_ID_EPIC_REGEX      = """[A-Z]{2,3}/?[0-9]{7,8}"""
-        private const val VOTER_ID_NAME_LABEL      = """(?i)(elector'?s?\s+name|electoral\s+name|name)\s*:\s*"""
+        /** Prefer these lines for the cardholder name (over a generic "Name:" elsewhere on the card). */
+        private const val VOTER_ID_ELECTOR_NAME_LABEL_DETECT =
+            """(?i)^\s*(?:elector'?s?\s+name|electors?\s+name|electors?\s+namme|electors?\s+narne|electoral\s+name)\b"""
+        /** Used when no elector-specific label appears; includes OCR typos (NME, Namme). */
+        private const val VOTER_ID_GENERIC_NAME_LABEL_DETECT = """(?i)^\s*(?:name|nme|namme|narne)\b"""
+        private const val VOTER_ID_NAME_LABEL_STRIP  =
+            """(?i)^\s*(?:elector'?s?\s+name|electors?\s+name|electors?\s+namme|electors?\s+narne|electoral\s+name|name|nme|namme|narne)\s*[:\-]?\s*"""
+        private const val VOTER_ID_NAME_LABEL_ONLY   =
+            """(?i)^(?:elector'?s?\s+name|electors?\s+name|electors?\s+namme|electors?\s+narne|electoral\s+name|name|nme|namme|narne)$"""
         private const val VOTER_ID_NAME_STOP       =
-            """(?i)(father'?[cs]?\s+(name|lame)|mother'?s?\s+name|husband'?s?\s+name|relation'?s?\s+name|s/o|w/o|d/o|h/o|male|female|dob|date\s+of\s+birth|age\s+as|address)"""
+            """(?i)(elector'?s?\s+name|electors?\s+name|electors?\s+narne|electoral\s+name|fathers?\s*/\s*mothers?\s*/\s*husbands?\s+name|fathers?\s*names?|fahers?\s+name|fatiers?\s+name|father'?[cs]?\s+(name|lame|nane)|mother'?s?\s+name|husband'?s?\s+name|(?:re|ro)lations?|relation'?s?\s+name|s/o|w/o|d/o|h/o|male|female|sex|gender|dob|date\s+of\s+birth|age\s+as|address)"""
+        private const val VOTER_ID_GUARDIAN_LABEL_STRIP =
+            """(?i)^\s*(?:(?:fa[rt]her'?s?|fahers?|fatiers?)\s*(?:names?|(?:name|lame|nane))|mother'?s?\s+(?:name|nane)|husband'?s?\s+names?|(?:re|ro)lations?|\bS/O\b|\bW/O\b|\bD/O\b|\bH/O\b)\s*[:\-]?\s*"""
+        private const val VOTER_ID_GUARDIAN_STOP =
+            """(?i)(elector'?s?\s+name|electors?\s+name|electoral\s+name|fathers?\s*/\s*mothers?\s*/\s*husbands?\s+name|fathers?\s*names?|fahers?\s+name|fatiers?\s+name|father'?[cs]?\s+(name|lame|nane)|mother'?s?\s+name|husband'?s?\s+name|(?:re|ro)lations?|relation'?s?\s+name|s/o|w/o|d/o|h/o|male|female|sex|gender|dob|date\s+of\s+birth|age\s+as|address)"""
 
         // Driving licence skip keywords
         private val DL_SKIP_KEYWORDS = listOf(
@@ -1125,6 +1695,16 @@ class DocumentFieldExtractorService @Inject constructor() {
             "income", "permanent", "account", "number", "aadhaar", "voter",
             "driving", "licence", "passport", "republic", "election",
             "commission", "authority", "transport", "motor"
+        )
+
+        private val INDIAN_STATES = setOf(
+            "andhra pradesh", "arunachal pradesh", "assam", "bihar", "chhattisgarh",
+            "goa", "gujarat", "haryana", "himachal pradesh", "jharkhand", "karnataka",
+            "kerala", "madhya pradesh", "maharashtra", "manipur", "meghalaya", "mizoram",
+            "nagaland", "odisha", "punjab", "rajasthan", "sikkim", "tamil nadu",
+            "telangana", "tripura", "uttar pradesh", "uttarakhand", "west bengal",
+            "andaman", "chandigarh", "dadra", "delhi", "jammu", "kashmir",
+            "ladakh", "lakshadweep", "puducherry", "pondicherry"
         )
     }
 }

@@ -1,8 +1,5 @@
 package com.example.neodocscanner.feature.hub.presentation
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,19 +18,22 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -42,7 +42,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -55,33 +54,27 @@ import com.example.neodocscanner.feature.hub.presentation.components.CreateVault
 import com.example.neodocscanner.feature.hub.presentation.components.DeleteInstanceDialog
 import com.example.neodocscanner.feature.hub.presentation.components.RenameInstanceDialog
 
-/**
- * Application Hub — the top-level vault list.
- *
- * iOS equivalent: ApplicationHubView.swift.
- *
- * UX adaptations:
- * - LargeTopAppBar (M3) with collapse-on-scroll instead of iOS navigation title
- * - FAB for create instead of toolbar "+" button
- * - Empty state with icon + CTA button (iOS had a similar empty state)
- * - Snackbar feedback instead of iOS toast / banner
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ApplicationHubScreen(
     onNavigateToVault: (instanceId: String) -> Unit,
     onNavigateToProfile: () -> Unit,
     onNavigateToSettings: () -> Unit,
+    onNavigateToApplicationLink: () -> Unit,
     onLogout: () -> Unit,
     authViewModel: AuthViewModel,
     viewModel: ApplicationHubViewModel = hiltViewModel()
 ) {
-    val uiState       by viewModel.uiState.collectAsStateWithLifecycle()
-    val loggedInUser  by authViewModel.loggedInUsername.collectAsStateWithLifecycle()
-    val snackbarHost  = remember { SnackbarHostState() }
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val loggedInUser by authViewModel.loggedInUsername.collectAsStateWithLifecycle()
+    val snackbarHost = remember { SnackbarHostState() }
+    val sortedInstances = remember(uiState.instances) {
+        uiState.instances.sortedWith(
+            compareBy<ApplicationInstanceUi> { it.instance.isArchived }
+                .thenBy { it.instance.customName.lowercase() }
+        )
+    }
 
-    // Show snackbar messages (rename / delete / create confirmations)
     LaunchedEffect(uiState.snackbarMessage) {
         uiState.snackbarMessage?.let {
             snackbarHost.showSnackbar(it)
@@ -90,172 +83,159 @@ fun ApplicationHubScreen(
     }
 
     Scaffold(
-        modifier       = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
-        snackbarHost   = { SnackbarHost(snackbarHost) },
-        topBar         = {
-            LargeTopAppBar(
-                title          = {
-                    Column {
-                        Text(
-                            text       = "Applications",
-                            fontWeight = FontWeight.Bold
-                        )
-                        if (loggedInUser.isNotBlank()) {
-                            Text(
-                                text  = loggedInUser,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                },
-                navigationIcon = {
-                    // iOS: Circle with person.crop.circle icon in leading toolbar
-                    ProfileAvatarButton(
-                        username = loggedInUser,
-                        onClick  = onNavigateToProfile
+        containerColor = MaterialTheme.colorScheme.background,
+        snackbarHost = { SnackbarHost(hostState = snackbarHost) },
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        text = "Applications",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
                     )
                 },
-                actions        = {
-                    // iOS: gearshape button in trailing toolbar
+                navigationIcon = {
+                    ProfileAvatarButton(
+                        username = loggedInUser,
+                        onClick = onNavigateToProfile
+                    )
+                },
+                actions = {
                     IconButton(onClick = onNavigateToSettings) {
                         Icon(
-                            imageVector        = Icons.Default.Settings,
+                            imageVector = Icons.Default.Settings,
                             contentDescription = "Settings"
                         )
                     }
-                },
-                scrollBehavior = scrollBehavior
+                }
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick            = viewModel::showCreateSheet,
-                containerColor     = MaterialTheme.colorScheme.primary,
-                contentColor       = MaterialTheme.colorScheme.onPrimary
-            ) {
-                Icon(
-                    imageVector        = Icons.Default.Add,
-                    contentDescription = "Create new vault"
-                )
-            }
+            ExtendedFloatingActionButton(
+                onClick = viewModel::showCreateSheet,
+                shape = CircleShape,
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                elevation = FloatingActionButtonDefaults.elevation(
+                    defaultElevation = 8.dp,
+                    pressedElevation = 10.dp
+                ),
+                icon = {
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.18f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                },
+                text = {
+                    Text(
+                        text = "New",
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            )
         }
     ) { innerPadding ->
-
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
             when {
-                // ── Loading ────────────────────────────────────────────────────
                 uiState.isLoading -> {
                     CircularProgressIndicator(
                         modifier = Modifier.align(Alignment.Center)
                     )
                 }
 
-                // ── Empty state ────────────────────────────────────────────────
-                uiState.instances.isEmpty() -> {
+                sortedInstances.isEmpty() -> {
                     EmptyHubState(
-                        onCreateVault = viewModel::showCreateSheet,
-                        modifier      = Modifier.align(Alignment.Center)
+                        onCreateApplication = viewModel::showCreateSheet,
+                        onLinkFromQr = onNavigateToApplicationLink,
+                        modifier = Modifier.align(Alignment.Center)
                     )
                 }
 
-                // ── Vault list ─────────────────────────────────────────────────
                 else -> {
                     LazyColumn(
-                        contentPadding    = PaddingValues(
-                            start  = 16.dp,
-                            end    = 16.dp,
-                            top    = 8.dp,
-                            bottom = 96.dp   // space above FAB
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(
+                            start = 16.dp,
+                            end = 16.dp,
+                            top = 8.dp,
+                            bottom = 104.dp
                         ),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                        modifier            = Modifier.fillMaxSize()
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // Active vaults first, archived at the bottom
-                        val sorted = uiState.instances.sortedWith(
-                            compareBy { it.instance.isArchived }
-                        )
-
                         items(
-                            items = sorted,
-                            key   = { it.instance.id }
+                            items = sortedInstances,
+                            key = { it.instance.id }
                         ) { instanceUi ->
                             ApplicationInstanceCard(
                                 instanceUi = instanceUi,
-                                onTap      = {
-                                    onNavigateToVault(instanceUi.instance.id)
-                                },
-                                onRename   = viewModel::startRename,
-                                onArchive  = viewModel::archiveInstance,
-                                onDelete   = viewModel::startDelete
+                                onTap = { onNavigateToVault(instanceUi.instance.id) },
+                                onRename = viewModel::startRename,
+                                onArchive = viewModel::archiveInstance,
+                                onDelete = viewModel::startDelete
                             )
                         }
                     }
                 }
             }
 
-            // ── Operation progress overlay ─────────────────────────────────────
-            AnimatedVisibility(
-                visible  = uiState.isOperationRunning,
-                enter    = fadeIn(),
-                exit     = fadeOut(),
-                modifier = Modifier.align(Alignment.Center)
-            ) {
-                CircularProgressIndicator()
+            if (uiState.isOperationRunning) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.10f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator()
+                }
             }
         }
     }
 
-    // ── Create vault sheet ────────────────────────────────────────────────────
     if (uiState.showCreateSheet) {
         CreateVaultBottomSheet(
             onDismiss = viewModel::dismissCreateSheet,
-            onCreate  = { template, name ->
+            onCreate = { template, name ->
                 viewModel.createFromTemplate(template, name)
             },
-            onScanQR  = {
-                // QR scanner is wired in Module 5
+            onScanQR = {
                 viewModel.dismissCreateSheet()
+                onNavigateToApplicationLink()
             }
         )
     }
 
-    // ── Rename dialog ─────────────────────────────────────────────────────────
     uiState.renameTarget?.let { instance ->
         RenameInstanceDialog(
-            instance      = instance,
-            currentInput  = uiState.renameInput,
+            instance = instance,
+            currentInput = uiState.renameInput,
             onInputChange = viewModel::onRenameInputChange,
-            onConfirm     = viewModel::confirmRename,
-            onDismiss     = viewModel::dismissRename
+            onConfirm = viewModel::confirmRename,
+            onDismiss = viewModel::dismissRename
         )
     }
 
-    // ── Delete confirmation dialog ────────────────────────────────────────────
     uiState.deleteTarget?.let { instance ->
         DeleteInstanceDialog(
-            instance  = instance,
+            instance = instance,
             onConfirm = viewModel::confirmDelete,
             onDismiss = viewModel::dismissDelete
         )
     }
 }
 
-// ── Profile avatar button ─────────────────────────────────────────────────────
-
-/**
- * Circular avatar button shown in the leading position of the Hub TopAppBar.
- *
- * iOS equivalent: Circle().fill(Color("PrimaryOrange").opacity(0.1)).overlay(
- *     Image(systemName: "person.crop.circle")…) in ApplicationHubView.swift.
- *
- * Shows initials if the user's display name has at least 2 words, otherwise shows
- * the person icon — mirrors iOS initials derivation in ProfileView.swift.
- */
 @Composable
 private fun ProfileAvatarButton(
     username: String,
@@ -271,63 +251,74 @@ private fun ProfileAvatarButton(
 
     IconButton(onClick = onClick) {
         Box(
-            modifier         = Modifier
+            modifier = Modifier
                 .size(36.dp)
                 .clip(CircleShape)
-                .background(primaryColor.copy(alpha = 0.12f)),
+                .background(MaterialTheme.colorScheme.primaryContainer),
             contentAlignment = Alignment.Center
         ) {
             if (initials.isEmpty()) {
                 Icon(
-                    imageVector        = Icons.Default.Person,
+                    imageVector = Icons.Default.Person,
                     contentDescription = "Profile",
-                    tint               = primaryColor,
-                    modifier           = Modifier.size(22.dp)
+                    tint = primaryColor,
+                    modifier = Modifier.size(20.dp)
                 )
             } else {
                 Text(
-                    text       = initials,
-                    fontSize   = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color      = primaryColor
+                    text = initials,
+                    color = primaryColor,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
                 )
             }
         }
     }
 }
 
-// ── Empty state ───────────────────────────────────────────────────────────────
-
 @Composable
 private fun EmptyHubState(
-    onCreateVault: () -> Unit,
+    onCreateApplication: () -> Unit,
+    onLinkFromQr: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
-        modifier            = modifier.padding(40.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Icon(
-            imageVector        = Icons.Default.FolderOpen,
+            imageVector = Icons.Default.FolderOpen,
             contentDescription = null,
-            modifier           = Modifier.size(72.dp),
-            tint               = MaterialTheme.colorScheme.outlineVariant
+            tint = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.size(56.dp)
         )
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-            text       = "No Applications Yet",
-            style      = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color      = MaterialTheme.colorScheme.onSurface
+            text = "No applications yet",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold
         )
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text      = "Tap + to create a new application and start scanning documents.",
-            style     = MaterialTheme.typography.bodyMedium,
-            color     = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            modifier  = Modifier.fillMaxWidth()
+            text = "Create a new application or link one from QR.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
         )
+        Spacer(modifier = Modifier.height(20.dp))
+        Button(onClick = onCreateApplication) {
+            Text("New application")
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        TextButton(onClick = onLinkFromQr) {
+            Icon(
+                imageVector = Icons.Default.QrCodeScanner,
+                contentDescription = null
+            )
+            Spacer(modifier = Modifier.size(6.dp))
+            Text("Link from QR")
+        }
     }
 }

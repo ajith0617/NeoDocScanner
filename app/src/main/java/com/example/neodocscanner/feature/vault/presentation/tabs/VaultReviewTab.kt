@@ -4,10 +4,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -31,13 +29,12 @@ import com.example.neodocscanner.feature.vault.presentation.components.DocumentC
 import com.example.neodocscanner.feature.vault.presentation.components.DocumentGalleryCard
 
 /**
- * Uncategorised tab — 2-column gallery grid, same layout as iOS VaultReviewView.
- *
- * iOS equivalent: VaultReviewView.swift — LazyVGrid with DocumentCard + context menus.
+ * Uncategorised tab — photo-style grid (column count from vault settings).
  */
 @Composable
 fun VaultReviewTab(
     documents: List<Document>,
+    allDocumentsInScope: List<Document> = documents,
     contextMenuState: DocumentContextMenuState = DocumentContextMenuState(),
     onDeleteDocument: (String) -> Unit = {},
     onOpenDocument: (String) -> Unit = {},
@@ -60,6 +57,7 @@ fun VaultReviewTab(
     onUnmergePdf: (String) -> Unit = {},
     onSharePdf: (String) -> Unit = {},
     onOpenPdfViewer: (String) -> Unit = {},
+    gridColumns: Int = 2,
     modifier: Modifier = Modifier
 ) {
     if (documents.isEmpty()) {
@@ -67,33 +65,35 @@ fun VaultReviewTab(
         return
     }
 
+    val cols = gridColumns.coerceIn(2, 4)
+    val gridSpacing = when (cols) {
+        4 -> 4.dp
+        3 -> 6.dp
+        else -> 10.dp
+    }
+    val horizontalPadding = when (cols) {
+        4 -> 6.dp
+        3 -> 8.dp
+        else -> 12.dp
+    }
     LazyVerticalGrid(
-        columns               = GridCells.Fixed(2),
+        columns               = GridCells.Fixed(cols),
         modifier              = modifier.fillMaxSize(),
-        contentPadding        = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 96.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement   = Arrangement.spacedBy(10.dp)
+        contentPadding        = PaddingValues(
+            start = horizontalPadding,
+            end = horizontalPadding,
+            top = gridSpacing,
+            bottom = 96.dp
+        ),
+        horizontalArrangement = Arrangement.spacedBy(gridSpacing),
+        verticalArrangement   = Arrangement.spacedBy(gridSpacing)
     ) {
-        // ── Header ─────────────────────────────────────────────────────────
-        item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
-            Row(
-                modifier          = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text       = "Documents that couldn't be auto-routed",
-                    style      = MaterialTheme.typography.bodySmall,
-                    color      = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier   = Modifier.weight(1f)
-                )
-            }
-        }
-
         items(documents, key = { it.id }) { document ->
             DocumentGalleryCard(
                 document                  = document,
+                allDocumentsInScope       = allDocumentsInScope,
+                gridColumns               = cols,
+                enableTypeSwitch          = false,
                 onTap                     = { onOpenDocument(document.id) },
                 onReclassify              = onReclassify,
                 contextMenuState          = contextMenuState,
@@ -126,24 +126,24 @@ private fun EmptyUncategorisedState(modifier: Modifier = Modifier) {
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            modifier            = Modifier.padding(40.dp)
+            modifier            = Modifier.padding(horizontal = 32.dp, vertical = 24.dp)
         ) {
             Icon(
                 imageVector        = Icons.Default.CheckCircle,
                 contentDescription = null,
-                tint               = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
-                modifier           = Modifier.size(56.dp)
+                tint               = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f),
+                modifier           = Modifier.size(48.dp)
             )
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text       = "All Categorised",
+                text       = "Nothing here yet",
                 style      = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 color      = MaterialTheme.colorScheme.onSurface
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text      = "Every scanned document has been routed to a category.\nDocuments that can't be auto-classified will appear here.",
+                text      = "Scans that are not placed in a category appear here. Use the camera to add documents.",
                 style     = MaterialTheme.typography.bodySmall,
                 color     = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center

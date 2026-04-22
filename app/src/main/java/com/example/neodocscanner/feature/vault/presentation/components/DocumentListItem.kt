@@ -16,7 +16,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -84,26 +86,25 @@ fun DocumentListItem(
     var showMenu by remember { mutableStateOf(false) }
 
     val isSelected       = document.id in contextMenuState.selectedIds
-    val selectionIndex   = contextMenuState.selectionOrder.indexOf(document.id).let { if (it >= 0) it + 1 else null }
+    val badgeIndex       = contextMenuState.multiSelectBadgeIndex(document.id)
     val isInAnyGroupingMode = contextMenuState.isAadhaarPairingMode
             || contextMenuState.isPassportPairingMode
             || contextMenuState.isGenericGroupingMode
-    val isAnchor         = document.id == contextMenuState.genericAnchorId
-    val isCandidate      = document.id in contextMenuState.genericCandidateIds
-    val isAadhaarAnchor  = document.id == contextMenuState.aadhaarAnchorId
-    val isPassportAnchor = document.id == contextMenuState.passportAnchorId
     val groupMemberCount = contextMenuState.groupMemberCountFor(document.id)
+    val inMultiSelect = contextMenuState.isInMultiSelect(document.id)
 
-    // Highlight ring when it's the anchor or a candidate
-    val showHighlight = isAnchor || isCandidate || isAadhaarAnchor || isPassportAnchor
+    val showHighlight = inMultiSelect
 
     val clickEnabled = when {
         contextMenuState.isSelectionMode -> true
-        contextMenuState.isAadhaarPairingMode -> document.documentClass == DocumentClass.AADHAAR
-                && document.groupId == null && !isAadhaarAnchor
-        contextMenuState.isPassportPairingMode -> document.documentClass == DocumentClass.PASSPORT
-                && document.groupId == null && !isPassportAnchor
-        contextMenuState.isGenericGroupingMode -> !isAnchor  // candidates or finalize
+        contextMenuState.isAadhaarPairingMode ->
+            document.documentClass == DocumentClass.AADHAAR && document.groupId == null
+        contextMenuState.isPassportPairingMode ->
+            document.documentClass == DocumentClass.PASSPORT && document.groupId == null
+        contextMenuState.isGenericGroupingMode ->
+            document.groupId == null
+                && document.documentClass != DocumentClass.AADHAAR
+                && document.documentClass != DocumentClass.PASSPORT
         else -> document.processingStatus == ProcessingStatus.COMPLETE
     }
 
@@ -123,21 +124,21 @@ fun DocumentListItem(
                     onClick      = {
                         when {
                             contextMenuState.isSelectionMode -> onToggleSelection(document)
-                            contextMenuState.isAadhaarPairingMode && !isAadhaarAnchor ->
+                            contextMenuState.isAadhaarPairingMode ->
                                 onConfirmAadhaarPair(document)
-                            contextMenuState.isPassportPairingMode && !isPassportAnchor ->
+                            contextMenuState.isPassportPairingMode ->
                                 onConfirmPassportPair(document)
-                            contextMenuState.isGenericGroupingMode -> {
-                                if (!isAnchor) onToggleGenericCandidate(document)
-                            }
+                            contextMenuState.isGenericGroupingMode ->
+                                onToggleGenericCandidate(document)
                             else -> onTap()
                         }
                     },
                     onLongClick  = {
-                        if (!contextMenuState.isSelectionMode && !isInAnyGroupingMode) {
-                            showMenu = true
-                        } else if (contextMenuState.isSelectionMode) {
-                            onToggleSelection(document)
+                        when {
+                            contextMenuState.isSelectionMode ->
+                                onToggleSelection(document)
+                            isInAnyGroupingMode -> { }
+                            else -> onEnterSelectionMode(document)
                         }
                     }
                 )
@@ -145,8 +146,8 @@ fun DocumentListItem(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // ── Selection indicator / thumbnail ───────────────────────────────
-            if (contextMenuState.isSelectionMode && selectionIndex != null) {
-                // Selected: show numbered circle
+            if (badgeIndex != null) {
+                // Selected in Select / Pair / Group-with: show numbered circle (same order rules)
                 Box(
                     modifier         = Modifier
                         .size(36.dp)
@@ -154,7 +155,7 @@ fun DocumentListItem(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text      = "$selectionIndex",
+                        text      = "$badgeIndex",
                         color     = Color.White,
                         fontSize  = 13.sp,
                         fontWeight = FontWeight.Bold
@@ -196,7 +197,7 @@ fun DocumentListItem(
             // Name + metadata
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text     = document.displayName,
+                    text     = document.displayTitle,
                     style    = MaterialTheme.typography.bodyMedium,
                     maxLines = 1
                 )
@@ -214,25 +215,40 @@ fun DocumentListItem(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Badge / progress / selection check
-            when {
-                contextMenuState.isSelectionMode && isSelected -> {
-                    Icon(
-                        imageVector        = Icons.Default.CheckCircle,
-                        contentDescription = "Selected",
-                        tint               = MaterialTheme.colorScheme.primary,
-                        modifier           = Modifier.size(20.dp)
-                    )
+            // Badge / progress / selection check + overflow (⋮) for actions
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                when {
+                    contextMenuState.isSelectionMode && isSelected -> {
+                        Icon(
+                            imageVector        = Icons.Default.CheckCircle,
+                            contentDescription = "Selected",
+                            tint               = MaterialTheme.colorScheme.primary,
+                            modifier           = Modifier.size(20.dp)
+                        )
+                    }
+                    document.processingStatus == ProcessingStatus.QUEUED ||
+                    document.processingStatus == ProcessingStatus.ANALYSING -> {
+                        CircularProgressIndicator(
+                            modifier    = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                    }
+                    document.processingStatus == ProcessingStatus.COMPLETE -> {
+                        DocumentClassBadge(documentClass = document.documentClass)
+                    }
                 }
-                document.processingStatus == ProcessingStatus.QUEUED ||
-                document.processingStatus == ProcessingStatus.ANALYSING -> {
-                    CircularProgressIndicator(
-                        modifier    = Modifier.size(16.dp),
-                        strokeWidth = 2.dp
-                    )
-                }
-                document.processingStatus == ProcessingStatus.COMPLETE -> {
-                    DocumentClassBadge(documentClass = document.documentClass)
+                if (clickEnabled) {
+                    IconButton(
+                        onClick = { showMenu = true },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector        = Icons.Default.MoreVert,
+                            contentDescription = "More options",
+                            tint               = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier           = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
         }
@@ -311,10 +327,11 @@ fun buildContextMenuItems(
     }
 
     // ── Normal mode — full menu (iOS exact parity) ─────────────────────────
-    DropdownMenuItem(
-        text    = { Text("Select") },
-        onClick = { onEnterSelectionMode(document); onDismiss() }
-    )
+    // Select: use long-press on the row to enter selection mode.
+    // DropdownMenuItem(
+    //     text    = { Text("Select") },
+    //     onClick = { onEnterSelectionMode(document); onDismiss() }
+    // )
 
     // Aadhaar pair option (only for Aadhaar docs not already grouped)
     if (document.documentClass == DocumentClass.AADHAAR && document.groupId == null) {
@@ -332,8 +349,11 @@ fun buildContextMenuItems(
         )
     }
 
-    // Group with... (not available for Aadhaar/Passport — they always pair exactly 2)
-    if (document.documentClass != DocumentClass.AADHAAR && document.documentClass != DocumentClass.PASSPORT) {
+    // Group with... — ungrouped only; not Aadhaar/Passport (they use Pair with…)
+    if (document.groupId == null &&
+        document.documentClass != DocumentClass.AADHAAR &&
+        document.documentClass != DocumentClass.PASSPORT
+    ) {
         DropdownMenuItem(
             text    = { Text("Group with…") },
             onClick = { onStartGenericGrouping(document); onDismiss() }
@@ -396,15 +416,38 @@ data class DocumentContextMenuState(
     val isSelectionMode: Boolean         = false,
     val selectedIds: Set<String>         = emptySet(),
     val selectionOrder: List<String>     = emptyList(),
+    /** Vault selection scope: null = all categories, section id = that section only, "__inbox__" = uncategorised. */
+    val selectionScopeSectionId: String? = null,
     val isAadhaarPairingMode: Boolean    = false,
-    val aadhaarAnchorId: String?         = null,
+    val aadhaarPairingOrder: List<String> = emptyList(),
     val isPassportPairingMode: Boolean   = false,
-    val passportAnchorId: String?        = null,
+    val passportPairingOrder: List<String> = emptyList(),
     val isGenericGroupingMode: Boolean   = false,
-    val genericAnchorId: String?         = null,
-    val genericCandidateIds: Set<String> = emptySet(),
+    val genericGroupingOrder: List<String> = emptyList(),
     // Maps doc.id → total group member count (including self)
     val groupMemberCounts: Map<String, Int> = emptyMap()
 ) {
     fun groupMemberCountFor(docId: String): Int = groupMemberCounts[docId] ?: 1
+
+    /** Same numbering rules as Select: order in list → 1-based badge; toggle removes and reindexes. */
+    fun multiSelectBadgeIndex(docId: String): Int? {
+        val order = when {
+            isSelectionMode -> selectionOrder
+            isGenericGroupingMode -> genericGroupingOrder
+            isAadhaarPairingMode -> aadhaarPairingOrder
+            isPassportPairingMode -> passportPairingOrder
+            else -> return null
+        }
+        val idx = order.indexOf(docId)
+        return if (idx >= 0) idx + 1 else null
+    }
+
+    fun isInMultiSelect(docId: String): Boolean =
+        if (isSelectionMode) docId in selectedIds
+        else when {
+            isGenericGroupingMode -> docId in genericGroupingOrder
+            isAadhaarPairingMode -> docId in aadhaarPairingOrder
+            isPassportPairingMode -> docId in passportPairingOrder
+            else -> false
+        }
 }

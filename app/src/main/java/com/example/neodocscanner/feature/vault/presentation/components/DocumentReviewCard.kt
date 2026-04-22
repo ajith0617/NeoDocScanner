@@ -16,10 +16,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -83,14 +85,11 @@ fun DocumentReviewCard(
 
     val classColor     = document.documentClass.badgeColor
     val isSelected     = document.id in contextMenuState.selectedIds
-    val selectionIndex = contextMenuState.selectionOrder.indexOf(document.id).let { if (it >= 0) it + 1 else null }
-    val isAnchor       = document.id == contextMenuState.genericAnchorId
-    val isCandidate    = document.id in contextMenuState.genericCandidateIds
+    val badgeIndex     = contextMenuState.multiSelectBadgeIndex(document.id)
     val groupMemberCount = contextMenuState.groupMemberCountFor(document.id)
+    val inMultiSelect = contextMenuState.isInMultiSelect(document.id)
 
-    val showHighlight   = isAnchor || isCandidate
-            || document.id == contextMenuState.aadhaarAnchorId
-            || document.id == contextMenuState.passportAnchorId
+    val showHighlight   = inMultiSelect
     val isInGroupingMode = contextMenuState.isAadhaarPairingMode
             || contextMenuState.isPassportPairingMode
             || contextMenuState.isGenericGroupingMode
@@ -106,26 +105,29 @@ fun DocumentReviewCard(
                     ) else Modifier
                 )
                 .combinedClickable(
-                    enabled     = document.processingStatus == ProcessingStatus.COMPLETE || contextMenuState.isSelectionMode,
+                    enabled     = document.processingStatus == ProcessingStatus.COMPLETE
+                        || contextMenuState.isSelectionMode
+                        || contextMenuState.isAadhaarPairingMode
+                        || contextMenuState.isPassportPairingMode
+                        || contextMenuState.isGenericGroupingMode,
                     onClick     = {
                         when {
                             contextMenuState.isSelectionMode -> onToggleSelection(document)
-                            contextMenuState.isAadhaarPairingMode &&
-                            document.id != contextMenuState.aadhaarAnchorId ->
+                            contextMenuState.isAadhaarPairingMode ->
                                 onConfirmAadhaarPair(document)
-                            contextMenuState.isPassportPairingMode &&
-                            document.id != contextMenuState.passportAnchorId ->
+                            contextMenuState.isPassportPairingMode ->
                                 onConfirmPassportPair(document)
-                            contextMenuState.isGenericGroupingMode && !isAnchor ->
+                            contextMenuState.isGenericGroupingMode ->
                                 onToggleGenericCandidate(document)
                             else -> onOpenDocument()
                         }
                     },
                     onLongClick = {
-                        if (!contextMenuState.isSelectionMode && !isInGroupingMode) {
-                            showMenu = true
-                        } else if (contextMenuState.isSelectionMode) {
-                            onToggleSelection(document)
+                        when {
+                            contextMenuState.isSelectionMode ->
+                                onToggleSelection(document)
+                            isInGroupingMode -> { }
+                            else -> onEnterSelectionMode(document)
                         }
                     }
                 ),
@@ -163,7 +165,7 @@ fun DocumentReviewCard(
                                             .data(File(context.filesDir, "NeoDocs/$thumbPath"))
                                             .crossfade(true)
                                             .build(),
-                                        contentDescription = document.displayName,
+                                        contentDescription = document.displayTitle,
                                         contentScale       = ContentScale.Crop,
                                         modifier           = Modifier.fillMaxSize()
                                     )
@@ -194,7 +196,7 @@ fun DocumentReviewCard(
                             .padding(horizontal = 8.dp, vertical = 6.dp)
                     ) {
                         Text(
-                            text     = document.displayName,
+                            text     = document.displayTitle,
                             style    = MaterialTheme.typography.labelMedium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -208,8 +210,8 @@ fun DocumentReviewCard(
                     }
                 }
 
-                // ── Selection overlay ─────────────────────────────────────────
-                if (contextMenuState.isSelectionMode && selectionIndex != null) {
+                // ── Select / Pair / Group-with numbered badge (same as gallery)
+                if (badgeIndex != null) {
                     Box(
                         modifier         = Modifier
                             .align(Alignment.TopEnd)
@@ -219,10 +221,33 @@ fun DocumentReviewCard(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text       = "$selectionIndex",
+                            text       = "$badgeIndex",
                             color      = Color.White,
                             fontSize   = 11.sp,
                             fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                // Overflow → same dropdown actions as long-press used to open
+                if (document.processingStatus == ProcessingStatus.COMPLETE
+                    || contextMenuState.isSelectionMode
+                    || contextMenuState.isAadhaarPairingMode
+                    || contextMenuState.isPassportPairingMode
+                    || contextMenuState.isGenericGroupingMode
+                ) {
+                    IconButton(
+                        onClick = { showMenu = true },
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(5.dp)
+                            .size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector        = Icons.Default.MoreVert,
+                            contentDescription = "More options",
+                            tint               = Color.White.copy(alpha = 0.92f),
+                            modifier           = Modifier.size(17.dp)
                         )
                     }
                 }

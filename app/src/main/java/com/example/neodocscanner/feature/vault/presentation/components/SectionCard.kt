@@ -4,9 +4,11 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,24 +20,21 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,18 +46,21 @@ import androidx.compose.ui.unit.sp
 import com.example.neodocscanner.core.domain.model.Document
 import com.example.neodocscanner.core.domain.model.DocumentClass
 import com.example.neodocscanner.feature.vault.presentation.SectionWithDocs
+import com.example.neodocscanner.ui.theme.GreenAccent
 
 /**
- * Expandable section card showing documents in a 2-column gallery grid.
+ * Expandable section card showing documents in a configurable-column gallery grid.
  *
  * iOS equivalent: SectionBlock in VaultChecklistView.swift — 2-column LazyVGrid
  * of DocumentCard composables, with a camera-placeholder when empty and an
  * "Add more" dashed card appended at the end.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SectionCard(
     sectionWithDocs: SectionWithDocs,
     isCollapsed: Boolean,
+    isPulsing: Boolean = false,
     onToggleCollapse: () -> Unit,
     onOpenDocument: (String) -> Unit = {},
     onReclassify: (String, DocumentClass) -> Unit = { _, _ -> },
@@ -83,11 +85,24 @@ fun SectionCard(
     onUnmergePdf: (String) -> Unit = {},
     onSharePdf: (String) -> Unit = {},
     onOpenPdfViewer: (String) -> Unit = {},
+    onScanToSection: (String) -> Unit = {},
+    onLongPressSection: (String) -> Unit = {},
+    onToggleSectionSelection: (String) -> Unit = {},
+    /** Gallery columns per row (2–4). */
+    gridColumns: Int = 2,
     modifier: Modifier = Modifier
 ) {
     val section   = sectionWithDocs.section
     val documents = sectionWithDocs.documents
-    val isComplete = sectionWithDocs.isComplete
+    val allDocumentsInSection = sectionWithDocs.allDocumentsInSection
+
+    val showSectionBulkHeader =
+        contextMenuState.isSelectionMode && documents.isNotEmpty()
+
+    val allSectionDocsSelected = documents.isNotEmpty() &&
+        documents.all { it.id in contextMenuState.selectedIds }
+
+    val headerInteractionSource = remember { MutableInteractionSource() }
 
     val accentColor = section.acceptedClasses.firstOrNull()?.let {
         DocumentClass.fromRaw(it)
@@ -98,84 +113,92 @@ fun SectionCard(
         label       = "chevron_rotation"
     )
 
-    Card(
-        modifier  = modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        colors    = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer
-        )
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (isPulsing) Modifier.background(accentColor.copy(alpha = 0.07f))
+                else Modifier
+            )
     ) {
-        // ── Header row ────────────────────────────────────────────────────────
+        // ── Header row (ripple / long-press on full strip except section circle) ─
         Row(
-            modifier          = Modifier
-                .fillMaxWidth()
-                .clickable { onToggleCollapse() }
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+            modifier          = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Chevron
-            Icon(
-                imageVector        = Icons.Default.ChevronRight,
-                contentDescription = null,
-                tint               = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier           = Modifier.size(14.dp).rotate(chevronAngle)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            // Section icon (accent-coloured folder)
-            Icon(
-                imageVector        = Icons.Default.Folder,
-                contentDescription = null,
-                tint               = accentColor,
-                modifier           = Modifier.size(18.dp)
-            )
-            Spacer(modifier = Modifier.width(10.dp))
-            // Title + required badge
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text       = section.title,
-                        style      = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.SemiBold
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .combinedClickable(
+                        interactionSource = headerInteractionSource,
+                        indication        = ripple(bounded = true),
+                        onClick             = onToggleCollapse,
+                        onLongClick         = { onLongPressSection(section.id) }
                     )
-                    if (section.isRequired) {
+            ) {
+                Row(
+                    modifier          = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector        = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint               = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier           = Modifier.size(14.dp).rotate(chevronAngle)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text       = section.title,
+                                style      = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            if (section.isRequired) {
+                                Text(
+                                    text  = " *",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                    if (documents.isNotEmpty()) {
                         Text(
-                            text  = " *",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Bold
+                            text       = "${documents.size}",
+                            style      = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Medium,
+                            color      = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        Spacer(modifier = Modifier.width(6.dp))
                     }
                 }
             }
-            // Document count pill
-            if (documents.isNotEmpty()) {
-                Text(
-                    text     = "${documents.size}",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color    = accentColor,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(accentColor.copy(alpha = 0.12f))
-                        .padding(horizontal = 7.dp, vertical = 3.dp)
+            if (showSectionBulkHeader) {
+                Icon(
+                    imageVector        = if (allSectionDocsSelected) Icons.Default.CheckCircle
+                                         else Icons.Default.RadioButtonUnchecked,
+                    contentDescription = if (allSectionDocsSelected) "Section fully selected"
+                                         else "Select or clear section",
+                    tint               = if (allSectionDocsSelected) GreenAccent
+                                         else MaterialTheme.colorScheme.outline.copy(alpha = 0.55f),
+                    modifier           = Modifier
+                        .padding(end = 14.dp)
+                        .size(22.dp)
+                        .clickable { onToggleSectionSelection(section.id) }
                 )
-                Spacer(modifier = Modifier.width(8.dp))
             }
-            // Fulfilment indicator
-            Icon(
-                imageVector        = if (isComplete) Icons.Default.CheckCircle
-                                     else Icons.Default.RadioButtonUnchecked,
-                contentDescription = null,
-                tint               = if (isComplete) Color(0xFF4CAF50)
-                                     else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                modifier           = Modifier.size(18.dp)
-            )
         }
 
-        // ── Accent divider ────────────────────────────────────────────────────
-        HorizontalDivider(color = accentColor.copy(alpha = 0.20f))
+        HorizontalDivider(
+            thickness = 0.5.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+        )
 
-        // ── Expandable 2-col gallery grid ─────────────────────────────────────
+        // ── Expandable gallery grid (2–4 columns) ─────────────────────────────
         AnimatedVisibility(
             visible = !isCollapsed,
             enter   = expandVertically(),
@@ -183,12 +206,20 @@ fun SectionCard(
         ) {
             if (documents.isEmpty()) {
                 // Dashed camera placeholder — iOS style "Tap to scan"
-                EmptySectionPlaceholder(modifier = Modifier.padding(12.dp))
+                EmptySectionPlaceholder(
+                    onClick = { onScanToSection(section.id) },
+                    modifier = Modifier.padding(12.dp)
+                )
             } else {
                 // Non-scrollable grid (parent LazyColumn handles scrolling)
                 Column(modifier = Modifier.padding(12.dp)) {
-                    val chunked = documents.chunked(2)
-                    chunked.forEach { rowDocs ->
+                    val showAddMoreInGrid = !contextMenuState.isSelectionMode &&
+                        !contextMenuState.isAadhaarPairingMode &&
+                        !contextMenuState.isPassportPairingMode &&
+                        !contextMenuState.isGenericGroupingMode
+                    val n = gridColumns.coerceIn(2, 4)
+                    val chunks = documents.chunked(n)
+                    chunks.forEachIndexed { rowIndex, rowDocs ->
                         Row(
                             modifier            = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -196,6 +227,8 @@ fun SectionCard(
                             rowDocs.forEach { doc ->
                                 DocumentGalleryCard(
                                     document                  = doc,
+                                    allDocumentsInScope       = allDocumentsInSection,
+                                    enableTypeSwitch          = false,
                                     onTap                     = { onOpenDocument(doc.id) },
                                     onReclassify              = onReclassify,
                                     contextMenuState          = contextMenuState,
@@ -222,27 +255,39 @@ fun SectionCard(
                                     modifier                  = Modifier.weight(1f)
                                 )
                             }
-                            // Pad the last row if only 1 item
-                            if (rowDocs.size == 1) Spacer(modifier = Modifier.weight(1f))
+                            val missing = n - rowDocs.size
+                            if (missing > 0) {
+                                val isLastRow = rowIndex == chunks.lastIndex
+                                if (showAddMoreInGrid && isLastRow) {
+                                    AddMoreCard(
+                                        onClick = { onScanToSection(section.id) },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    repeat(missing - 1) {
+                                        Spacer(modifier = Modifier.weight(1f))
+                                    }
+                                } else {
+                                    repeat(missing) {
+                                        Spacer(modifier = Modifier.weight(1f))
+                                    }
+                                }
+                            }
                         }
                         Spacer(modifier = Modifier.height(10.dp))
                     }
-                    // "Add more" dashed card (iOS-style, only in normal mode)
-                    if (!contextMenuState.isSelectionMode &&
-                        !contextMenuState.isAadhaarPairingMode &&
-                        !contextMenuState.isPassportPairingMode &&
-                        !contextMenuState.isGenericGroupingMode
-                    ) {
-                        // Place it inline in a row if the last row has only 1 item
-                        val lastRowFull = documents.size % 2 == 0
-                        if (lastRowFull) {
-                            Row(modifier = Modifier.fillMaxWidth()) {
-                                AddMoreCard(modifier = Modifier.weight(1f))
+                    if (showAddMoreInGrid && documents.isNotEmpty() && documents.size % n == 0) {
+                        Row(
+                            modifier            = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            AddMoreCard(
+                                onClick = { onScanToSection(section.id) },
+                                modifier = Modifier.weight(1f)
+                            )
+                            repeat(n - 1) {
                                 Spacer(modifier = Modifier.weight(1f))
                             }
                         }
-                        // If last row was already partial, AddMoreCard goes in the same row above
-                        // (handled by the padding logic — visible naturally after the grid)
                     }
                 }
             }
@@ -253,7 +298,10 @@ fun SectionCard(
 // ── Empty section placeholder ─────────────────────────────────────────────────
 
 @Composable
-private fun EmptySectionPlaceholder(modifier: Modifier = Modifier) {
+private fun EmptySectionPlaceholder(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Box(
         modifier         = modifier
             .fillMaxWidth()
@@ -263,7 +311,8 @@ private fun EmptySectionPlaceholder(modifier: Modifier = Modifier) {
                 width = 1.5.dp,
                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.28f),
                 shape = RoundedCornerShape(8.dp)
-            ),
+            )
+            .clickable { onClick() },
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -286,7 +335,10 @@ private fun EmptySectionPlaceholder(modifier: Modifier = Modifier) {
 // ── Add more card ─────────────────────────────────────────────────────────────
 
 @Composable
-private fun AddMoreCard(modifier: Modifier = Modifier) {
+private fun AddMoreCard(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Box(
         modifier         = modifier
             .aspectRatio(1f)
@@ -295,7 +347,8 @@ private fun AddMoreCard(modifier: Modifier = Modifier) {
                 width = 1.5.dp,
                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.28f),
                 shape = RoundedCornerShape(12.dp)
-            ),
+            )
+            .clickable { onClick() },
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {

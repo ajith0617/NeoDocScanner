@@ -13,9 +13,14 @@ import com.example.neodocscanner.core.domain.repository.DocumentRepository
 import com.example.neodocscanner.core.domain.repository.SectionRepository
 import com.example.neodocscanner.feature.vault.data.service.ocr.OcrService
 import com.example.neodocscanner.feature.vault.data.service.ocr.OCRTextSanitizer
+import com.example.neodocscanner.feature.vault.data.service.masking.AadhaarMaskingService
+import com.example.neodocscanner.feature.vault.data.service.masking.PanMaskingService
 import com.example.neodocscanner.feature.vault.data.service.routing.SectionRoutingService
 import com.example.neodocscanner.feature.vault.data.service.scanner.DocumentFileManager
 import com.example.neodocscanner.feature.vault.data.service.text.DocumentFieldExtractorService
+import com.example.neodocscanner.feature.vault.domain.syncDocumentClassForSectionMove
+import com.example.neodocscanner.feature.vault.domain.buildAadhaarGroupName
+import com.example.neodocscanner.feature.vault.domain.buildPassportGroupName
 import com.example.neodocscanner.feature.vault.data.service.text.DocumentNamingService
 import com.example.neodocscanner.navigation.Screen
 import com.google.gson.Gson
@@ -26,6 +31,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.security.MessageDigest
 import javax.inject.Inject
 
 // ── UI State ──────────────────────────────────────────────────────────────────
@@ -94,6 +100,8 @@ class DocumentViewerViewModel @Inject constructor(
     private val fieldExtractor: DocumentFieldExtractorService,
     private val namingService: DocumentNamingService,
     private val fileManager: DocumentFileManager,
+    private val aadhaarMaskingService: AadhaarMaskingService,
+    private val panMaskingService: PanMaskingService,
     private val routingService: SectionRoutingService,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
@@ -122,10 +130,10 @@ class DocumentViewerViewModel @Inject constructor(
                 _state.update { it.copy(groupPages = groupMembers) }
             }
 
-            // Auto-show OCR highlights if already processed
-            if (doc.isOcrProcessed && doc.decodedRegions.isNotEmpty()) {
-                _state.update { it.copy(showHighlights = true) }
-            }
+            // Auto-show OCR highlights on first open (disabled for now).
+            // if (doc.isOcrProcessed && doc.decodedRegions.isNotEmpty()) {
+            //     _state.update { it.copy(showHighlights = true) }
+            // }
 
             loadImages()
         }
@@ -220,10 +228,34 @@ class DocumentViewerViewModel @Inject constructor(
     fun showMoveSheet()   { _state.update { it.copy(showMoveSheet = true) } }
     fun dismissMoveSheet(){ _state.update { it.copy(showMoveSheet = false) } }
 
-    fun routeToSection(sectionId: String) {
+    fun routeToSection(sectionId: String?) {
         val doc = _state.value.document ?: return
         viewModelScope.launch {
+            val instanceId = doc.applicationInstanceId
+            val sections = instanceId?.let { sectionRepository.getByInstanceOnce(it) }.orEmpty()
+            if (sections.isNotEmpty()) {
+                documentRepository.syncDocumentClassForSectionMove(doc, sectionId, sections)
+            }
+            val reloaded = documentRepository.getById(doc.id)
+            val text = reloaded?.extractedText?.takeIf { it.isNotBlank() }
+            if (reloaded != null && text != null) {
+                val allDocs = documentRepository.getByInstanceOnce(reloaded.applicationInstanceId ?: "")
+                val backText = if (reloaded.documentClass == DocumentClass.PASSPORT && reloaded.groupId != null) {
+                    allDocs.firstOrNull { it.groupId == reloaded.groupId && it.id != reloaded.id }
+                        ?.extractedText
+                        .orEmpty()
+                } else ""
+                val extraction = fieldExtractor.extract(
+                    documentClass = reloaded.documentClass,
+                    text = text,
+                    backText = backText
+                )
+                documentRepository.updateExtractedFields(reloaded.id, gson.toJson(extraction))
+            }
             documentRepository.updateSectionId(doc.id, sectionId)
+            rerunMaskingAfterMove(doc.id)
+            tryAutoPairAadhaarAfterMove(doc.id, doc.applicationInstanceId)
+            tryAutoPairPassportAfterMove(doc.id, doc.applicationInstanceId)
             val updated = documentRepository.getById(doc.id)
             _state.update { it.copy(document = updated, showMoveSheet = false) }
         }
@@ -288,5 +320,200 @@ class DocumentViewerViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    private suspend fun tryAutoPairPassportAfterMove(documentId: String, instanceId: String?) {
+        if (instanceId.isNullOrBlank()) return
+        val moved = documentRepository.getById(documentId) ?: return
+        if (moved.documentClass != DocumentClass.PASSPORT || moved.groupId != null) return
+
+        val movedNumber = detectPassportNumber(moved)
+        val normalizedMoved = normalizePassportNumber(movedNumber) ?: return
+
+        val candidate = documentRepository.getByInstanceOnce(instanceId)
+            .asSequence()
+            .filter {
+                it.id != moved.id &&
+                    it.documentClass == DocumentClass.PASSPORT &&
+                    it.groupId == null
+            }
+            .firstOrNull { normalizePassportNumber(detectPassportNumber(it)) == normalizedMoved }
+            ?: return
+
+        val movedSide = canonicalPassportSide(moved.passportSide)
+        val candidateSide = canonicalPassportSide(candidate.passportSide)
+        val (dataPageId, addressPageId) = when {
+            movedSide == "address" -> candidate.id to moved.id
+            candidateSide == "address" -> moved.id to candidate.id
+            candidateSide == "data" -> candidate.id to moved.id
+            else -> moved.id to candidate.id
+        }
+
+        val gid = java.util.UUID.randomUUID().toString()
+        val groupName = buildPassportGroupName(
+            dataPage = if (dataPageId == moved.id) moved else candidate,
+            addressPage = if (addressPageId == moved.id) moved else candidate
+        )
+        documentRepository.updateGrouping(dataPageId, gid, groupName, 0, null, "data")
+        documentRepository.updateGrouping(addressPageId, gid, groupName, 1, null, "address")
+    }
+
+    private fun detectPassportNumber(doc: Document): String? {
+        val fromFields = doc.decodedFields.firstOrNull { field ->
+            val label = field.label.lowercase()
+            label.contains("passport number") || label.contains("passport no")
+        }?.value
+        if (!fromFields.isNullOrBlank()) {
+            val cleaned = fromFields.uppercase().replace(Regex("[^A-Z0-9]"), "")
+            Regex("""[A-Z]\d{7}""").find(cleaned)?.value?.let { return it }
+        }
+        val text = doc.extractedText ?: return null
+        val regex = Regex("""\b([A-Z])\s*[-]?\s*(\d{7})\b""")
+        for (line in text.lines()) {
+            val stripped = line.trim()
+            val mrzRatio = stripped.count { it == '<' }.toDouble() / (stripped.length.coerceAtLeast(1).toDouble())
+            if (stripped.length >= 30 && mrzRatio > 0.20) continue
+            val m = regex.find(stripped.uppercase()) ?: continue
+            return m.groupValues[1] + m.groupValues[2]
+        }
+        return null
+    }
+
+    private fun normalizePassportNumber(raw: String?): String? {
+        if (raw.isNullOrBlank()) return null
+        val cleaned = raw.uppercase().replace(Regex("[^A-Z0-9]"), "")
+        return cleaned.takeIf { it.isNotBlank() }
+    }
+
+    private fun canonicalPassportSide(raw: String?): String? {
+        return when (raw?.trim()?.lowercase()) {
+            "data", "front", "f", "mrz" -> "data"
+            "address", "back", "b", "addr" -> "address"
+            else -> null
+        }
+    }
+
+    private suspend fun rerunMaskingAfterMove(documentId: String) {
+        val moved = documentRepository.getById(documentId) ?: return
+        val instanceId = moved.applicationInstanceId ?: return
+        val regions = moved.decodedRegions
+        if (regions.isEmpty()) return
+        when (moved.documentClass) {
+            DocumentClass.AADHAAR -> {
+                val maskResult = aadhaarMaskingService.maskAndHash(
+                    originalRelativePath = moved.relativePath,
+                    regions = regions,
+                    instanceId = instanceId,
+                    documentId = moved.id
+                )
+                if (maskResult.maskedRelativePath != null || maskResult.uidHash != null) {
+                    documentRepository.updateMasking(
+                        moved.id,
+                        maskResult.maskedRelativePath,
+                        maskResult.uidHash,
+                        moved.thumbnailRelativePath
+                    )
+                }
+            }
+            DocumentClass.PAN -> {
+                val maskedPath = panMaskingService.maskAndSave(
+                    originalRelativePath = moved.relativePath,
+                    regions = regions,
+                    instanceId = instanceId,
+                    documentId = moved.id
+                )
+                if (maskedPath != null) {
+                    documentRepository.updateMasking(
+                        moved.id,
+                        maskedPath,
+                        moved.aadhaarUidHash,
+                        moved.thumbnailRelativePath
+                    )
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    private suspend fun tryAutoPairAadhaarAfterMove(documentId: String, instanceId: String?) {
+        if (instanceId.isNullOrBlank()) return
+        val moved = documentRepository.getById(documentId) ?: return
+        if (moved.documentClass != DocumentClass.AADHAAR || moved.groupId != null) return
+
+        val movedUid = detectAadhaarNumber(moved) ?: return
+        val movedUidHash = sha256(movedUid)
+        documentRepository.updateMasking(
+            moved.id,
+            moved.maskedRelativePath,
+            movedUidHash,
+            moved.thumbnailRelativePath
+        )
+
+        val movedSide = canonicalAadhaarSide(moved.aadhaarSide) ?: inferAadhaarSide(moved)
+        if (movedSide != null) {
+            documentRepository.updateClassification(moved.id, moved.documentClass.displayName, movedSide)
+        }
+
+        val candidate = documentRepository.getByInstanceOnce(instanceId)
+            .asSequence()
+            .filter {
+                it.id != moved.id &&
+                    it.documentClass == DocumentClass.AADHAAR &&
+                    it.groupId == null
+            }
+            .firstOrNull { candidate ->
+                val candidateHash = candidate.aadhaarUidHash ?: detectAadhaarNumber(candidate)?.let { sha256(it) }
+                candidateHash == movedUidHash
+            } ?: return
+
+        val candidateSide = canonicalAadhaarSide(candidate.aadhaarSide) ?: inferAadhaarSide(candidate)
+        val (frontDoc, backDoc) = when {
+            movedSide == "back" -> candidate to moved
+            candidateSide == "back" -> moved to candidate
+            candidateSide == "front" -> candidate to moved
+            else -> moved to candidate
+        }
+
+        val gid = java.util.UUID.randomUUID().toString()
+        val groupName = buildAadhaarGroupName(frontDoc, backDoc)
+        documentRepository.updateGrouping(frontDoc.id, gid, groupName, 0, "front", null)
+        documentRepository.updateGrouping(backDoc.id, gid, groupName, 1, "back", null)
+    }
+
+    private fun detectAadhaarNumber(doc: Document): String? {
+        val fromFields = doc.decodedFields.firstOrNull { field ->
+            field.label.equals("Aadhaar Number", ignoreCase = true)
+        }?.value
+        val fromFieldClean = fromFields
+            ?.replace(Regex("[^0-9]"), "")
+            ?.takeIf { it.length == 12 }
+        if (fromFieldClean != null) return fromFieldClean
+        val text = doc.extractedText ?: return null
+        return fieldExtractor.detectAadhaarUID(fieldExtractor.normaliseDigits(text))
+    }
+
+    private fun inferAadhaarSide(doc: Document): String? {
+        val labels = doc.decodedFields.map { it.label.lowercase() }
+        if (labels.any { it.contains("address") }) return "back"
+        if (labels.any { it.contains("aadhaar number") || it == "name" || it.contains("date of birth") || it == "gender" }) {
+            return "front"
+        }
+        val lower = doc.extractedText.orEmpty().lowercase()
+        if (lower.contains("address")) return "back"
+        if (lower.contains("dob") || lower.contains("date of birth")) return "front"
+        return null
+    }
+
+    private fun canonicalAadhaarSide(raw: String?): String? {
+        return when (raw?.trim()?.lowercase()) {
+            "front", "f" -> "front"
+            "back", "b", "address" -> "back"
+            else -> null
+        }
+    }
+
+    private fun sha256(value: String): String {
+        val bytes = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
+        return bytes.joinToString("") { "%02x".format(it) }
     }
 }

@@ -272,17 +272,17 @@ Legend: **Done** = implemented at functional level (UI may differ). **Partial** 
 | 14 | Pair / group / rename / reorder / PDF / unmerge | Done | **Done** (Compose UI) |
 | 15 | Document viewer + detail sheet | Done | **Done** |
 | 16 | Manual reclassify + reroute | Done | **Done** (`reclassifyAndReroute`) |
-| 17 | **Visible documents / inbox projection** (hide backs, non-primary generic, archived) | Done | **Pending** — `VaultUiState` still uses raw `sectionId` filters |
-| 18 | **Gallery card: Aadhaar split thumbnails + partner** | Done | **Partial** — badge `F+B` when paired; **single** thumb only |
-| 19 | **Gallery card: generic stack “deck” snapshots** | Done | **Partial** — `×N` badge; **no** layered stack thumbs |
-| 20 | **Scan from empty section / Add more with section hint** | Done | **Pending** — placeholders not wired; no `pendingCaptureSectionId` in VM/pipeline |
-| 21 | **Routing conflict queue** (ML section ≠ hint) + dialog | Done | **Pending** — `SectionRoutingConflict` **model exists**; not queued in VM; no `AlertDialog` in `DocuVaultScreen` |
-| 22 | **Recently filled section pulse / auto-expand** | Done | **Pending** |
-| 23 | Drag-drop reorder between cards / onto section header (iOS 16+) | Done | **Pending** (Android uses menus + sheets) |
-| 24 | Application picker / QR deep link onboarding | Done | **Pending** (domain `QRPayload` only) |
-| 25 | File import from Files (non-scanner) | Done | **Pending** / verify |
-| 26 | Lottie / extended animations | Done | **Pending** |
-| 27 | Field extractor debug screen | Done | **Pending** |
+| 17 | **Visible documents / inbox projection** (hide backs, non-primary generic, archived) | Done | **Done** |
+| 18 | **Gallery card: Aadhaar split thumbnails + partner** | Done | **Done** |
+| 19 | **Gallery card: generic stack “deck” snapshots** | Done | **Done** |
+| 20 | **Scan from empty section / Add more with section hint** | Done | **Done** |
+| 21 | **Routing conflict queue** (ML section ≠ hint) + dialog | Done | **Done** |
+| 22 | **Recently filled section pulse / auto-expand** | Done | **Done** |
+| 23 | Drag-drop reorder between cards / onto section header (iOS 16+) | Done | **Done** (interaction-equivalent on Android via reorder sheet + move-to-section flow; iOS gesture style not required for v1) |
+| 24 | Application picker / QR deep link onboarding | Done | **Done** |
+| 25 | File import from Files (non-scanner) | Done | **Done** (v1 scope: Files image import implemented and integrated with the same processing pipeline) |
+| 26 | Lottie / extended animations | Done | **Done** (Compose motion implemented; no mandatory Lottie dependency for current scope) |
+| 27 | Field extractor debug screen | Done | **Done** |
 | 28 | `DocumentReviewCard` / `DocumentListItem` | N/A | **Legacy** — gallery path preferred; keep or remove after audit |
 
 ### 6.1 UI / UX migration notes
@@ -297,12 +297,33 @@ Legend: **Done** = implemented at functional level (UI may differ). **Partial** 
 
 1. **Build:** From `NeoDocScanner-android/`, use Gradle 8.13+ (`gradle-wrapper.properties`). Typical: `./gradlew :app:assembleDebug`.  
 2. **First priority parity gaps (recommended order):**  
-   - Implement **`visibleDocuments` / `inboxDocuments`** filtering in `DocuVaultViewModel` (mirror `DocuVaultViewModel+Sections.swift`).  
-   - Wire **`pendingCaptureSectionId`** through `DocuVaultViewModel.onScanResult` / `ScanPipelineService.applyRouting` and **section-scoped scan** from `SectionCard`.  
-   - Implement **`pendingRoutingConflicts`** queue + **`DocuVaultScreen`** dialog using existing `SectionRoutingConflict` model.  
-   - Upgrade **`DocumentGalleryCard`** with `partnerDocument` + `groupDocuments` for **split** and **stack** thumbnails.  
+   - No critical parity gaps remain for the agreed Android v1 scope.
+   - Optional enhancements: true gesture drag/drop UX styling parity and broader non-image Files import support.
 3. **Do not modify** the iOS repo per project rules.  
 4. **Update this document** when closing rows in §6.
+
+### 7.1 Current implementation notes (validated in Android code)
+
+- `DocuVaultViewModel` now applies iOS-style visible-card projection for section/inbox lists (one representative per group, archived hidden from grids).
+- `SectionCard` empty/add-more cards are now clickable and trigger section-scoped scanner launch.
+- `DocuVaultScreen` now supports scanner launch with an optional section hint (global FAB = no hint; section cards = section hint).
+- `DocuVaultViewModel.onScanResult` now accepts `preferredSectionId` and tracks `pendingCaptureSectionId` during scan processing.
+- `ScanPipelineService.process/applyRouting` now accepts optional section hint and prefers routing to that section when the hinted section accepts the classified document type.
+- Hint-vs-ML mismatches now produce `SectionRoutingConflict` entries from pipeline routing, and `DocuVaultScreen` presents a conflict `AlertDialog` queue.
+- Current conflict policy: keep ML-detected routing by default, with explicit user override action to move the document to the hinted section.
+- `DocumentGalleryCard` now receives in-scope documents to render richer grouped previews: Aadhaar paired cards show split front/back thumbnails, and generic groups show layered stack thumbnails.
+- Checklist sections now auto-expand when their document count increases, and the affected section cards pulse briefly to draw attention.
+- Vault top app bar now includes Files import (`image/*`) that feeds selected images into the same scan pipeline as scanner captures.
+- Settings now exposes a developer diagnostics entry for **Field Extractor Debug**, with a dedicated screen to run extraction against pasted OCR text.
+- Hub create flow now routes QR onboarding to `ApplicationLinkScreen`, which parses `QRPayload` JSON and creates linked application instances via `createFromQR`.
+- Deep-link onboarding now auto-opens the QR link flow via `neodocs://link?payload=<encoded-json>` and pre-fills payload in `ApplicationLinkScreen`.
+- `ApplicationLinkScreen` now supports camera QR scanning (ML Kit code scanner), payload paste, and deep-link prefill as equivalent onboarding entry points.
+- Hub cards now include smoother state transitions using Compose animation (`animateColorAsState` for archive/restore state and `AnimatedContent` for live doc-count updates).
+- `DocumentGalleryCard` action sheet now matches iOS grouping eligibility for **Group with…**: shown only for ungrouped non-Aadhaar/non-Passport documents.
+- Selection action bar now exposes both **Group** and **Group & Move** actions, wired to existing `requestSelectionGroupName(andMove = ...)` flow for iOS-equivalent behaviour.
+- Generic **Group with…** mode now has an explicit bottom action bar with **Group** and **Cancel**, matching iOS behaviour where grouping can be confirmed after selecting additional documents.
+- Generic grouping now shows numbered selection order on cards (anchor = 1, then tap-order candidates), and grouping commit preserves this same order.
+- Tapping the first selected (anchor) card again in generic grouping mode now deselects it by exiting grouping mode, preventing accidental viewer open.
 
 ---
 

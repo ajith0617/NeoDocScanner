@@ -95,11 +95,10 @@ class DocumentDetailViewModel @Inject constructor(
 
     /**
      * Auto-generates a name using SmartNamingService — the same algorithm as iOS.
-     * Reads the "Name" field from extractedFields, then calls DocumentNamingService.
+     * Uses the primary name field from extractedFields (see [DocumentNamingService.name]).
      */
     fun autoGenerateName() {
         val doc = _state.value.document ?: return
-        val extractedName = doc.decodedFields.firstOrNull { it.label == "Name" }?.value
         val generated = namingService.name(
             documentClass = doc.documentClass,
             fields        = doc.decodedFields,

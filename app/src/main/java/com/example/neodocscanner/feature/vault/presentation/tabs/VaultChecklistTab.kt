@@ -62,6 +62,9 @@ fun VaultChecklistTab(
     onUnmergePdf: (String) -> Unit = {},
     onSharePdf: (String) -> Unit = {},
     onOpenPdfViewer: (String) -> Unit = {},
+    onScanToSection: (String) -> Unit = {},
+    onLongPressSection: (String) -> Unit = {},
+    onToggleSectionSelection: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     if (uiState.sectionsWithDocs.isEmpty()) {
@@ -72,7 +75,7 @@ fun VaultChecklistTab(
     LazyColumn(
         modifier            = modifier.fillMaxSize(),
         contentPadding      = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         item {
             CategoriesHeader(
@@ -85,6 +88,7 @@ fun VaultChecklistTab(
             SectionCard(
                 sectionWithDocs          = swd,
                 isCollapsed              = swd.section.id in uiState.collapsedSectionIds,
+                isPulsing                = swd.section.id in uiState.pulsingSectionIds,
                 onToggleCollapse         = { onToggleCollapse(swd.section.id) },
                 onOpenDocument           = onOpenDocument,
                 onReclassify             = onReclassify,
@@ -108,7 +112,11 @@ fun VaultChecklistTab(
                 onDeleteGroup            = onDeleteGroup,
                 onUnmergePdf             = onUnmergePdf,
                 onSharePdf               = onSharePdf,
-                onOpenPdfViewer          = onOpenPdfViewer
+                onOpenPdfViewer          = onOpenPdfViewer,
+                onScanToSection          = onScanToSection,
+                onLongPressSection       = onLongPressSection,
+                onToggleSectionSelection = onToggleSectionSelection,
+                gridColumns              = uiState.galleryGridColumns
             )
         }
 
@@ -124,19 +132,19 @@ private fun CategoriesHeader(completedSections: Int, totalSections: Int) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text       = "Document Categories",
+            text       = "Categories",
             style      = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
             modifier   = Modifier.weight(1f)
         )
-        Text(
-            text  = "$completedSections / $totalSections complete",
-            style = MaterialTheme.typography.labelMedium,
-            color = if (completedSections == totalSections)
-                MaterialTheme.colorScheme.primary
-            else
-                MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        // Text(
+        //     text  = "$completedSections / $totalSections complete",
+        //     style = MaterialTheme.typography.labelMedium,
+        //     color = if (completedSections == totalSections)
+        //         MaterialTheme.colorScheme.primary
+        //     else
+        //         MaterialTheme.colorScheme.onSurfaceVariant
+        // )
     }
 }
 

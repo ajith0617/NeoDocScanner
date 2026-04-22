@@ -196,7 +196,7 @@ fi
 
 
 # Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
-DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
+DEFAULT_JVM_OPTS="-Xmx64m -Xms64m"
 
 # Collect all arguments for the java command;
 #   * $DEFAULT_JVM_OPTS, $JAVA_OPTS, and $GRADLE_OPTS can contain fragments of
@@ -216,29 +216,8 @@ then
     die "xargs is not available"
 fi
 
-# Use "xargs" to parse quoted args.
-#
-# With -n1 it outputs one arg per line, with the quotes and backslashes removed.
-#
-# In Bash we could simply go:
-#
-#   readarray ARGS < <( xargs -n1 <<<"$DEFAULT_JVM_OPTS" )
-#
-# but POSIX shell has neither arrays nor command substitution with input redirection.
-#
-# In this script, we start with an array "$@" and append to it until we finally
-# invoke java using the array in double quotes. When "xargs" parses quoted arguments,
-# it splits each line into multiple arguments. The final invocation of java will have
-# all arguments split and ready to use.
-xargs -n1 -a /dev/stdin appArgs <<EOF
-$DEFAULT_JVM_OPTS
-$JAVA_OPTS
-$GRADLE_OPTS
-EOF
-# shellcheck disable=SC2061
-eval set -- "$( printf '%q ' "$@" ) $(
-    xargs -n1 <<<"$DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS"
-)"
+# macOS / BSD xargs does not support GNU-only flags used by some generated
+# wrapper variants. Keep JVM opts expansion simple and portable here.
 
 exec "$JAVACMD" $DEFAULT_JVM_OPTS $JAVA_OPTS $GRADLE_OPTS \
     "-Dorg.gradle.appname=$APP_BASE_NAME" \

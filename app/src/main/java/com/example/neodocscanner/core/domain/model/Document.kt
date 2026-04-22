@@ -88,6 +88,10 @@ data class Document(
             fileName.substringBeforeLast('.').replace("_", " ")
         }
 
+    /** UI-facing title — prefer the group label when this document belongs to a named pair/group. */
+    val displayTitle: String
+        get() = groupName?.takeIf { it.isNotBlank() } ?: displayName
+
     /** Relative date string. */
     val formattedDate: String
         get() {

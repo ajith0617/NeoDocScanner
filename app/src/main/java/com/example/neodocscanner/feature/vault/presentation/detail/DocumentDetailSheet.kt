@@ -22,6 +22,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -71,8 +72,7 @@ fun DocumentDetailSheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState       = sheetState,
-        dragHandle       = null
+        sheetState       = sheetState
     ) {
         Column(
             modifier = Modifier
@@ -87,12 +87,19 @@ fun DocumentDetailSheet(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text       = document.displayName,
-                    style      = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier   = Modifier.weight(1f)
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Document information",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text       = document.displayName,
+                        style      = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
                 TextButton(onClick = onDismiss) {
                     Text("Done", style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary)
@@ -215,23 +222,35 @@ fun DocumentDetailSheet(
 
 @Composable
 private fun MetadataSection(document: Document) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(4.dp),
-        verticalArrangement = Arrangement.spacedBy(0.dp)
-    ) {
+    Column(modifier = Modifier.fillMaxWidth()) {
         Text(
             text       = "Details",
             style      = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold
         )
         Spacer(Modifier.height(10.dp))
-        MetadataRow("Name",     document.displayName)
-        MetadataRow("Size",     document.formattedSize)
-        MetadataRow("Added",    document.formattedDate)
-        MetadataRow("Category", document.categoryName)
-        MetadataRow("Type",     document.documentType.rawValue)
+
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 1.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                MetadataRow("Name", document.displayName)
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                MetadataRow("Size", document.formattedSize)
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                MetadataRow("Added", document.formattedDate)
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                MetadataRow("Category", document.categoryName)
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                MetadataRow("Type", document.documentType.rawValue)
+            }
+        }
     }
 }
 
@@ -248,7 +267,7 @@ private fun MetadataRow(label: String, value: String) {
             style      = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.Medium,
             color      = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier   = Modifier.width(80.dp)
+            modifier   = Modifier.width(88.dp)
         )
         Text(
             text     = value,

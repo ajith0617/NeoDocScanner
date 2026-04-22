@@ -1,6 +1,7 @@
 package com.example.neodocscanner.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -11,7 +12,9 @@ import com.example.neodocscanner.feature.auth.presentation.AuthViewModel
 import com.example.neodocscanner.feature.auth.presentation.LoginScreen
 import com.example.neodocscanner.feature.auth.presentation.SplashScreen
 import com.example.neodocscanner.feature.hub.presentation.ApplicationHubScreen
+import com.example.neodocscanner.feature.hub.presentation.ApplicationLinkScreen
 import com.example.neodocscanner.feature.profile.presentation.ProfileScreen
+import com.example.neodocscanner.feature.settings.presentation.FieldExtractorDebugScreen
 import com.example.neodocscanner.feature.settings.presentation.SettingsScreen
 import com.example.neodocscanner.feature.vault.presentation.DocuVaultScreen
 import com.example.neodocscanner.feature.vault.presentation.pdf.PdfViewerScreen
@@ -34,7 +37,7 @@ import com.example.neodocscanner.feature.vault.presentation.viewer.DocumentViewe
  * LoginScreen share the same ViewModel instance (single DataStore subscription).
  */
 @Composable
-fun AppNavigation() {
+fun AppNavigation(initialQrPayload: String? = null) {
     val navController = rememberNavController()
     val authViewModel: AuthViewModel = hiltViewModel()
 
@@ -74,6 +77,11 @@ fun AppNavigation() {
 
         // ── Hub ───────────────────────────────────────────────────────────────
         composable(route = Screen.Hub.route) {
+            LaunchedEffect(initialQrPayload) {
+                if (!initialQrPayload.isNullOrBlank()) {
+                    navController.navigate("${Screen.ApplicationLink.route}?payload=${android.net.Uri.encode(initialQrPayload)}")
+                }
+            }
             ApplicationHubScreen(
                 authViewModel      = authViewModel,
                 onNavigateToVault  = { instanceId ->
@@ -81,6 +89,7 @@ fun AppNavigation() {
                 },
                 onNavigateToProfile  = { navController.navigate(Screen.Profile.route) },
                 onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
+                onNavigateToApplicationLink = { navController.navigate(Screen.ApplicationLink.route) },
                 onLogout           = {
                     navController.navigate(Screen.Login.route) {
                         popUpTo(Screen.Hub.route) { inclusive = true }
@@ -106,7 +115,35 @@ fun AppNavigation() {
         // ── Settings ──────────────────────────────────────────────────────────
         composable(route = Screen.Settings.route) {
             SettingsScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onOpenFieldExtractorDebug = {
+                    navController.navigate(Screen.FieldExtractorDebug.route)
+                }
+            )
+        }
+
+        composable(route = Screen.FieldExtractorDebug.route) {
+            FieldExtractorDebugScreen(
                 onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(route = Screen.ApplicationLink.route) {
+            ApplicationLinkScreen(
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            route = "${Screen.ApplicationLink.route}?payload={payload}",
+            arguments = listOf(
+                navArgument("payload") { type = NavType.StringType; nullable = true }
+            )
+        ) { backStackEntry ->
+            val payload = backStackEntry.arguments?.getString("payload")
+            ApplicationLinkScreen(
+                onNavigateBack = { navController.popBackStack() },
+                initialPayload = payload
             )
         }
 

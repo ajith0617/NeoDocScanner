@@ -18,6 +18,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class PassportGroupingService @Inject constructor() {
+    private val nonAlphaNum = Regex("[^A-Za-z0-9]")
 
     // ── Public types (mirrors iOS PassportDocumentSnapshot + PassportPairingDecision) ─
 
@@ -52,12 +53,13 @@ class PassportGroupingService @Inject constructor() {
         snapshots: List<PassportDocumentSnapshot>
     ): Pair<List<PassportPairingDecision>, List<String>> {
 
-        val passport = snapshots.filter {
-            (it.passportSide == "data" || it.passportSide == "address") && it.groupId == null
-        }
+        val passport = snapshots
+            .filter { it.groupId == null }
+            .map { it.copy(passportSide = canonicalPassportSide(it.passportSide)) }
 
         val dataPages    = passport.filter { it.passportSide == "data"    }.toMutableList()
         val addressPages = passport.filter { it.passportSide == "address" }.toMutableList()
+        val unknownPages = passport.filter { it.passportSide != "data" && it.passportSide != "address" }.toMutableList()
 
         Log.d(TAG, "process() | data: ${dataPages.size} | address: ${addressPages.size}")
 
@@ -73,15 +75,121 @@ class PassportGroupingService @Inject constructor() {
         Log.d(TAG, "P2 (fuzzy no.): ${p2.size} match(es)")
         decisions += p2
 
+        // P2b: Number-first fallback for unknown-side pages
+        val p2b = matchUnknownByNumber(dataPages, addressPages, unknownPages)
+        Log.d(TAG, "P2b (unknown-side number): ${p2b.size} match(es)")
+        decisions += p2b
+
+        // P2c: Same-side rescue only when one side is missing.
+        // This avoids overriding valid front/back side detections.
+        if (dataPages.isEmpty() || addressPages.isEmpty()) {
+            val p2c = matchSameSideByNumber(dataPages, addressPages)
+            Log.d(TAG, "P2c (same-side number): ${p2c.size} match(es)")
+            decisions += p2c
+        } else {
+            Log.d(TAG, "P2c skipped (both sides still present)")
+        }
+
         // P3: Session proximity
         val p3 = matchBySessionProximity(dataPages, addressPages)
         Log.d(TAG, "P3 (session): ${p3.size} match(es)")
         decisions += p3
 
-        val unresolvedIds = (dataPages + addressPages).map { it.id }
+        val unresolvedIds = (dataPages + addressPages + unknownPages).map { it.id }
         Log.d(TAG, "Total decisions: ${decisions.size} | unresolved: ${unresolvedIds.size}")
 
         return Pair(decisions, unresolvedIds)
+    }
+
+    /**
+     * Number-first fallback:
+     * - If unknown-side page has a number matching a known data page, pair as address.
+     * - If unknown-side page has a number matching a known address page, pair as data.
+     * - If two unknown-side pages share the same passport number, pair by scan order.
+     */
+    private fun matchUnknownByNumber(
+        dataPages: MutableList<PassportDocumentSnapshot>,
+        addressPages: MutableList<PassportDocumentSnapshot>,
+        unknownPages: MutableList<PassportDocumentSnapshot>
+    ): List<PassportPairingDecision> {
+        val decisions = mutableListOf<PassportPairingDecision>()
+
+        // Unknown + known(data/address) matches
+        val matchedUnknownIdx = mutableSetOf<Int>()
+        val matchedDataIdx = mutableSetOf<Int>()
+        val matchedAddressIdx = mutableSetOf<Int>()
+
+        for ((ui, unknown) in unknownPages.withIndex()) {
+            val num = normalizePassportNumber(unknown.passportNumber) ?: continue
+
+            val dataIdx = dataPages.indexOfFirst {
+                normalizePassportNumber(it.passportNumber) == num &&
+                        !matchedDataIdx.contains(dataPages.indexOf(it))
+            }
+            if (dataIdx >= 0) {
+                decisions += PassportPairingDecision(
+                    dataPageId = dataPages[dataIdx].id,
+                    addressPageId = unknown.id,
+                    confidence = PairingConfidence.CONFIDENT
+                )
+                matchedUnknownIdx += ui
+                matchedDataIdx += dataIdx
+                continue
+            }
+
+            val addressIdx = addressPages.indexOfFirst {
+                normalizePassportNumber(it.passportNumber) == num &&
+                        !matchedAddressIdx.contains(addressPages.indexOf(it))
+            }
+            if (addressIdx >= 0) {
+                decisions += PassportPairingDecision(
+                    dataPageId = unknown.id,
+                    addressPageId = addressPages[addressIdx].id,
+                    confidence = PairingConfidence.CONFIDENT
+                )
+                matchedUnknownIdx += ui
+                matchedAddressIdx += addressIdx
+            }
+        }
+
+        for (i in matchedAddressIdx.sortedDescending()) addressPages.removeAt(i)
+        for (i in matchedDataIdx.sortedDescending()) dataPages.removeAt(i)
+        for (i in matchedUnknownIdx.sortedDescending()) unknownPages.removeAt(i)
+
+        // Unknown + unknown exact number pairing
+        val byNumber = unknownPages
+            .mapNotNull { doc ->
+                normalizePassportNumber(doc.passportNumber)?.let { norm -> norm to doc }
+            }
+            .groupBy({ it.first }, { it.second })
+
+        val consumedIds = mutableSetOf<String>()
+        byNumber.forEach { (_, docs) ->
+            val ordered = docs.sortedWith(
+                compareBy<PassportDocumentSnapshot>({ it.scanSessionId ?: "" }, { it.pageIndex ?: Int.MAX_VALUE })
+            )
+            var idx = 0
+            while (idx + 1 < ordered.size) {
+                val first = ordered[idx]
+                val second = ordered[idx + 1]
+                if (first.id !in consumedIds && second.id !in consumedIds) {
+                    decisions += PassportPairingDecision(
+                        dataPageId = first.id,
+                        addressPageId = second.id,
+                        confidence = PairingConfidence.CONFIDENT
+                    )
+                    consumedIds += first.id
+                    consumedIds += second.id
+                }
+                idx += 2
+            }
+        }
+
+        if (consumedIds.isNotEmpty()) {
+            unknownPages.removeAll { it.id in consumedIds }
+        }
+
+        return decisions
     }
 
     // ── P1: Exact number match ────────────────────────────────────────────────
@@ -95,10 +203,10 @@ class PassportGroupingService @Inject constructor() {
         val matchedAddressIdx = mutableListOf<Int>()
 
         for ((di, data) in dataPages.withIndex()) {
-            val num = data.passportNumber?.takeIf { it.isNotEmpty() } ?: continue
+            val num = normalizePassportNumber(data.passportNumber) ?: continue
 
             val ai = addressPages.indexOfFirst { addr ->
-                addr.passportNumber == num &&
+                normalizePassportNumber(addr.passportNumber) == num &&
                 !matchedAddressIdx.contains(addressPages.indexOf(addr))
             }
             if (ai >= 0) {
@@ -130,14 +238,14 @@ class PassportGroupingService @Inject constructor() {
         val matchedAddressIdx = mutableListOf<Int>()
 
         for ((di, data) in dataPages.withIndex()) {
-            val num = data.passportNumber?.takeIf { it.isNotEmpty() } ?: continue
+            val num = normalizePassportNumber(data.passportNumber) ?: continue
 
             var bestAI   = -1
             var bestDist = Int.MAX_VALUE
 
             for ((ai, addr) in addressPages.withIndex()) {
                 if (matchedAddressIdx.contains(ai)) continue
-                val addrNum = addr.passportNumber?.takeIf { it.isNotEmpty() } ?: continue
+                val addrNum = normalizePassportNumber(addr.passportNumber) ?: continue
                 val dist = levenshtein(num, addrNum)
                 if (dist <= 2 && dist < bestDist) {
                     bestDist = dist
@@ -174,7 +282,8 @@ class PassportGroupingService @Inject constructor() {
 
             val ai = addressPages.indexOfFirst { addr ->
                 addr.scanSessionId == sessionId &&
-                addr.pageIndex == dataIndex + 1 &&
+                addr.pageIndex != null &&
+                kotlin.math.abs(addr.pageIndex - dataIndex) == 1 &&
                 !matchedAddressIdx.contains(addressPages.indexOf(addr))
             }
             if (ai >= 0) {
@@ -187,6 +296,52 @@ class PassportGroupingService @Inject constructor() {
 
         for (i in matchedAddressIdx.sortedDescending()) addressPages.removeAt(i)
         for (i in matchedDataIdx.sortedDescending())    dataPages.removeAt(i)
+        return decisions
+    }
+
+    /**
+     * Rescue pairing when both pages were detected as the same side.
+     * We still pair by passport number and assign first as data, second as address.
+     */
+    private fun matchSameSideByNumber(
+        dataPages: MutableList<PassportDocumentSnapshot>,
+        addressPages: MutableList<PassportDocumentSnapshot>
+    ): List<PassportPairingDecision> {
+        val decisions = mutableListOf<PassportPairingDecision>()
+
+        fun pairWithin(list: MutableList<PassportDocumentSnapshot>) {
+            val grouped = list
+                .mapNotNull { snap ->
+                    normalizePassportNumber(snap.passportNumber)?.let { norm -> norm to snap }
+                }
+                .groupBy({ it.first }, { it.second })
+
+            val consumed = mutableSetOf<String>()
+            grouped.forEach { (_, docs) ->
+                val ordered = docs.sortedWith(
+                    compareBy<PassportDocumentSnapshot>({ it.scanSessionId ?: "" }, { it.pageIndex ?: Int.MAX_VALUE })
+                )
+                var i = 0
+                while (i + 1 < ordered.size) {
+                    val first = ordered[i]
+                    val second = ordered[i + 1]
+                    if (first.id !in consumed && second.id !in consumed) {
+                        decisions += PassportPairingDecision(
+                            dataPageId = first.id,
+                            addressPageId = second.id,
+                            confidence = PairingConfidence.CONFIDENT
+                        )
+                        consumed += first.id
+                        consumed += second.id
+                    }
+                    i += 2
+                }
+            }
+            if (consumed.isNotEmpty()) list.removeAll { it.id in consumed }
+        }
+
+        pairWithin(dataPages)
+        pairWithin(addressPages)
         return decisions
     }
 
@@ -218,4 +373,18 @@ class PassportGroupingService @Inject constructor() {
     }
 
     companion object { private const val TAG = "PassportGroupingService" }
+
+    private fun normalizePassportNumber(raw: String?): String? {
+        if (raw.isNullOrBlank()) return null
+        val cleaned = raw.uppercase().replace(nonAlphaNum, "")
+        return cleaned.takeIf { it.isNotBlank() }
+    }
+
+    private fun canonicalPassportSide(raw: String?): String? {
+        return when (raw?.trim()?.lowercase()) {
+            "data", "front", "f", "mrz" -> "data"
+            "address", "back", "b", "addr" -> "address"
+            else -> null
+        }
+    }
 }
