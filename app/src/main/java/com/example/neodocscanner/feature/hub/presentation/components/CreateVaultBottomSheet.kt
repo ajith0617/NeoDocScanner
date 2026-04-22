@@ -21,7 +21,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.FlightTakeoff
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.MedicalServices
 import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.CurrencyRupee
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
@@ -41,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -187,6 +195,7 @@ private fun TemplateCard(
     isSelected: Boolean,
     onSelect: () -> Unit
 ) {
+    val icon = templateIconFor(template.iconName)
     val containerColor = if (isSelected)
         MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
     else
@@ -195,6 +204,7 @@ private fun TemplateCard(
     OutlinedCard(
         modifier  = Modifier
             .fillMaxWidth()
+            .height(112.dp)
             .clickable(onClick = onSelect),
         shape     = RoundedCornerShape(14.dp),
         colors    = CardDefaults.outlinedCardColors(containerColor = containerColor),
@@ -209,12 +219,15 @@ private fun TemplateCard(
         )
     ) {
         Column(
-            modifier            = Modifier.padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
             Box(
                 modifier = Modifier
-                    .size(34.dp)
+                    .size(40.dp)
                     .background(
                         color = if (isSelected) {
                             MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
@@ -225,20 +238,20 @@ private fun TemplateCard(
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text      = template.iconName.take(2).uppercase(),
-                    style     = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold,
-                    color     = if (isSelected)
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint      = if (isSelected)
                         MaterialTheme.colorScheme.primary
                     else
                         MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text      = template.name,
-                style     = MaterialTheme.typography.labelSmall,
+                style     = MaterialTheme.typography.labelMedium,
                 color     = if (isSelected)
                     MaterialTheme.colorScheme.onSurface
                 else
@@ -247,5 +260,17 @@ private fun TemplateCard(
                 maxLines  = 2
             )
         }
+    }
+}
+
+private fun templateIconFor(iconName: String): ImageVector {
+    return when (iconName) {
+        "account_balance" -> Icons.Default.AccountBalance
+        "home" -> Icons.Default.Home
+        "currency_rupee" -> Icons.Default.CurrencyRupee
+        "language" -> Icons.Default.Language
+        "flight" -> Icons.Default.FlightTakeoff
+        "medical_services" -> Icons.Default.MedicalServices
+        else -> Icons.Default.FolderOpen
     }
 }
