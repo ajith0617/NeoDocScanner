@@ -1,7 +1,5 @@
 package com.example.neodocscanner.feature.hub.presentation.components
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -70,25 +68,12 @@ fun ApplicationInstanceCard(
     val instance = instanceUi.instance
     val accent = vaultAccentFor(instance.iconName)
     var menuExpanded by remember { mutableStateOf(false) }
-
-    val containerColor by animateColorAsState(
-        targetValue = if (instance.isArchived) {
-            MaterialTheme.colorScheme.surface.copy(alpha = 0.84f)
-        } else {
-            MaterialTheme.colorScheme.surface.copy(alpha = 0.98f)
-        },
-        animationSpec = spring(),
-        label = "instance_card_color"
-    )
-    val borderColor by animateColorAsState(
-        targetValue = if (instance.isArchived) {
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
-        } else {
-            accent.strokeColor
-        },
-        animationSpec = spring(),
-        label = "instance_card_border"
-    )
+    val containerColor = if (instance.isArchived) {
+        MaterialTheme.colorScheme.surfaceContainerLow
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+    val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
 
     Surface(
         modifier = Modifier
@@ -205,61 +190,26 @@ fun ApplicationInstanceCard(
 
             Spacer(modifier = Modifier.height(10.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
-
-            val hasStatusChip = instance.linkStatus != "unlinked" || instance.isArchived
-            if (hasStatusChip) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (instance.linkStatus == "linked") {
-                        StateChip(
-                            text = "Linked",
-                            icon = Icons.Default.Link,
-                            containerColor = accent.containerColor,
-                            contentColor = accent.tintColor
-                        )
-                    }
-                    if (instance.linkStatus == "synced") {
-                        StateChip(
-                            text = "Synced",
-                            icon = Icons.Default.Sync,
-                            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onTertiaryContainer
-                        )
-                    }
-                    if (instance.isArchived) {
-                        StateChip(
-                            text = "Archived",
-                            icon = Icons.Default.Archive,
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-
             Spacer(modifier = Modifier.height(10.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                MetaPill(
-                    text = if (instanceUi.documentCount == 0) {
-                        "No documents yet"
-                    } else {
-                        "${instanceUi.documentCount} document${if (instanceUi.documentCount == 1) "" else "s"}"
+                Text(
+                    text = buildString {
+                        append(
+                            if (instanceUi.documentCount == 0) {
+                                "No documents"
+                            } else {
+                                "${instanceUi.documentCount} document${if (instanceUi.documentCount == 1) "" else "s"}"
+                            }
+                        )
+                        append("  •  ")
+                        append(instance.formattedDate)
                     },
-                    containerColor = accent.containerColor,
-                    contentColor = accent.tintColor
-                )
-
-                MetaPill(
-                    text = instance.formattedDate,
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.82f),
-                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 Spacer(modifier = Modifier.weight(1f))
@@ -292,62 +242,10 @@ private fun VaultIconBadge(accent: VaultAccent) {
     }
 }
 
-@Composable
-private fun StateChip(
-    text: String,
-    icon: ImageVector,
-    containerColor: Color,
-    contentColor: Color
-) {
-    Surface(
-        shape = RoundedCornerShape(999.dp),
-        color = containerColor
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = contentColor,
-                modifier = Modifier.size(14.dp)
-            )
-            Text(
-                text = text,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = contentColor
-            )
-        }
-    }
-}
-
-@Composable
-private fun MetaPill(
-    text: String,
-    containerColor: Color,
-    contentColor: Color
-) {
-    Surface(
-        shape = RoundedCornerShape(999.dp),
-        color = containerColor
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelMedium,
-            color = contentColor,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-        )
-    }
-}
-
 private data class VaultAccent(
     val icon: ImageVector,
     val tintColor: Color,
-    val containerColor: Color,
-    val strokeColor: Color
+    val containerColor: Color
 )
 
 private fun vaultAccentFor(iconName: String): VaultAccent {
@@ -355,44 +253,37 @@ private fun vaultAccentFor(iconName: String): VaultAccent {
         "account_balance" -> VaultAccent(
             icon = Icons.Default.AccountBalance,
             tintColor = Color(0xFF86523D),
-            containerColor = Color(0xFFF5E6DD),
-            strokeColor = Color(0xFFE4C5B5)
+            containerColor = Color(0xFFF5E6DD)
         )
         "home" -> VaultAccent(
             icon = Icons.Default.Home,
             tintColor = Color(0xFF426858),
-            containerColor = Color(0xFFE3F0EA),
-            strokeColor = Color(0xFFC4DACF)
+            containerColor = Color(0xFFE3F0EA)
         )
         "currency_rupee" -> VaultAccent(
             icon = Icons.Default.CurrencyRupee,
             tintColor = Color(0xFF7A5A14),
-            containerColor = Color(0xFFF6EBCB),
-            strokeColor = Color(0xFFE6D49E)
+            containerColor = Color(0xFFF6EBCB)
         )
         "language" -> VaultAccent(
             icon = Icons.Default.Language,
             tintColor = Color(0xFF365C87),
-            containerColor = Color(0xFFE5EDF8),
-            strokeColor = Color(0xFFC2D2E8)
+            containerColor = Color(0xFFE5EDF8)
         )
         "flight" -> VaultAccent(
             icon = Icons.Default.FlightTakeoff,
             tintColor = Color(0xFF7A4863),
-            containerColor = Color(0xFFF3E4ED),
-            strokeColor = Color(0xFFE3BED0)
+            containerColor = Color(0xFFF3E4ED)
         )
         "medical_services" -> VaultAccent(
             icon = Icons.Default.MedicalServices,
             tintColor = Color(0xFF8B4141),
-            containerColor = Color(0xFFF6E2E2),
-            strokeColor = Color(0xFFE3BCBC)
+            containerColor = Color(0xFFF6E2E2)
         )
         else -> VaultAccent(
             icon = Icons.Default.FolderOpen,
             tintColor = Color(0xFF5F4B8B),
-            containerColor = Color(0xFFEAE5F8),
-            strokeColor = Color(0xFFD1C8EC)
+            containerColor = Color(0xFFEAE5F8)
         )
     }
 }

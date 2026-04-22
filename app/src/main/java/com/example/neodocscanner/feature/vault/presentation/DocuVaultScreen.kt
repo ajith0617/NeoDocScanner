@@ -38,8 +38,10 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ClearAll
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GroupWork
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MoveToInbox
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -56,13 +58,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -70,6 +72,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -222,7 +225,20 @@ fun DocuVaultScreen(
 
     // ── Build context menu state ───────────────────────────────────────────────
 
-    val contextMenuState = buildContextMenuState(uiState)
+    val contextMenuState by remember(
+        uiState.allDocuments,
+        uiState.isSelectionMode,
+        uiState.selectedDocumentIds,
+        uiState.selectionSectionId,
+        uiState.isAadhaarPairingMode,
+        uiState.aadhaarPairingOrderedIds,
+        uiState.isPassportPairingMode,
+        uiState.passportPairingOrderedIds,
+        uiState.isGenericGroupingMode,
+        uiState.genericGroupingOrderedIds
+    ) {
+        derivedStateOf { buildContextMenuState(uiState) }
+    }
 
     // ── Pager ─────────────────────────────────────────────────────────────────
 
@@ -417,26 +433,6 @@ fun DocuVaultScreen(
                 )
 
                 ScanProgressBar(phase = uiState.scanPhase)
-
-                TabRow(selectedTabIndex = pagerState.currentPage) {
-                    VAULT_TABS.forEachIndexed { index, title ->
-                        Tab(
-                            selected = pagerState.currentPage == index,
-                            onClick  = { scope.launch { pagerState.animateScrollToPage(index) } },
-                            text = {
-                                val badge = when (index) {
-                                    0 -> if (uiState.categorizedDocumentCount > 0) "$title (${uiState.categorizedDocumentCount})" else title
-                                    1 -> if (uiState.inboxCount > 0) "$title (${uiState.inboxCount})" else title
-                                    else -> title
-                                }
-                                Text(
-                                    text       = badge,
-                                    fontWeight = if (pagerState.currentPage == index) FontWeight.SemiBold else FontWeight.Normal
-                                )
-                            }
-                        )
-                    }
-                }
             }
         },
 
@@ -616,6 +612,44 @@ fun DocuVaultScreen(
                     }
                 }
             }
+
+            AnimatedVisibility(
+                visible = !uiState.isSelectionMode &&
+                    !uiState.isGenericGroupingMode &&
+                    !uiState.isAadhaarPairingMode &&
+                    !uiState.isPassportPairingMode,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                NavigationBar {
+                    VAULT_TABS.forEachIndexed { index, title ->
+                        val selected = pagerState.currentPage == index
+                        val badge = when (index) {
+                            0 -> if (uiState.categorizedDocumentCount > 0) uiState.categorizedDocumentCount.toString() else null
+                            1 -> if (uiState.inboxCount > 0) uiState.inboxCount.toString() else null
+                            else -> null
+                        }
+                        NavigationBarItem(
+                            selected = pagerState.currentPage == index,
+                            onClick  = { scope.launch { pagerState.scrollToPage(index) } },
+                            icon = {
+                                Icon(
+                                    imageVector = if (index == 0) Icons.Default.Folder else Icons.Default.MoveToInbox,
+                                    contentDescription = title
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = badge?.let { "$title ($it)" } ?: title,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        )
+                    }
+                }
+            }
         }
     ) { innerPadding ->
         Box(
@@ -628,6 +662,7 @@ fun DocuVaultScreen(
             } else {
                 HorizontalPager(
                     state    = pagerState,
+                    beyondViewportPageCount = 1,
                     modifier = Modifier.fillMaxSize()
                 ) { page ->
                     when (page) {

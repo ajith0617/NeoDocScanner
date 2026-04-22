@@ -102,8 +102,7 @@ fun DocumentListItem(
         contextMenuState.isPassportPairingMode ->
             document.documentClass == DocumentClass.PASSPORT && document.groupId == null
         contextMenuState.isGenericGroupingMode ->
-            document.groupId == null
-                && document.documentClass != DocumentClass.AADHAAR
+            document.documentClass != DocumentClass.AADHAAR
                 && document.documentClass != DocumentClass.PASSPORT
         else -> document.processingStatus == ProcessingStatus.COMPLETE
     }
@@ -349,13 +348,12 @@ fun buildContextMenuItems(
         )
     }
 
-    // Group with... — ungrouped only; not Aadhaar/Passport (they use Pair with…)
-    if (document.groupId == null &&
-        document.documentClass != DocumentClass.AADHAAR &&
+    // Group with... / Add to this group... for non-Aadhaar/Passport documents.
+    if (document.documentClass != DocumentClass.AADHAAR &&
         document.documentClass != DocumentClass.PASSPORT
     ) {
         DropdownMenuItem(
-            text    = { Text("Group with…") },
+            text    = { Text(if (document.groupId != null) "Add to this group…" else "Group with…") },
             onClick = { onStartGenericGrouping(document); onDismiss() }
         )
     }

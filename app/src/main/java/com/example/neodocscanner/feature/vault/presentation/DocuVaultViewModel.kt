@@ -189,6 +189,7 @@ private data class VaultOverlay(
     val passportPairingOrderedIds: List<String>  = emptyList(),
     val isGenericGroupingMode: Boolean           = false,
     val genericGroupingOrderedIds: List<String>  = emptyList(),
+    val genericTargetGroupId: String?            = null,
     val showGroupNameSheet: Boolean              = false,
     val pendingGroupNameText: String             = "",
     val pendingGroupIsAadhaar: Boolean           = false,
@@ -832,32 +833,47 @@ class DocuVaultViewModel @Inject constructor(
     // ── Generic N-way Grouping Mode ────────────────────────────────────────────
 
     fun startGenericGrouping(from: Document) {
-        if (from.groupId != null) return
         if (from.documentClass == DocumentClass.AADHAAR || from.documentClass == DocumentClass.PASSPORT) return
         cancelAllGroupingModes()
         _overlay.update { it.copy(
             isGenericGroupingMode       = true,
-            genericGroupingOrderedIds   = listOf(from.id)
+            genericGroupingOrderedIds   = listOf(from.id),
+            genericTargetGroupId        = from.groupId
         ) }
     }
 
     /** Toggle generic group selection (unlimited count; same section; ungrouped; not Aadhaar/Passport). */
     fun toggleGenericGroupingSelection(doc: Document, allDocs: List<Document>) {
-        if (doc.groupId != null) return
         if (doc.documentClass == DocumentClass.AADHAAR || doc.documentClass == DocumentClass.PASSPORT) return
         _overlay.update { ov ->
             if (!ov.isGenericGroupingMode || ov.genericGroupingOrderedIds.isEmpty()) return@update ov
             val cur = ov.genericGroupingOrderedIds.toMutableList()
+            val targetGroupId = ov.genericTargetGroupId
             when {
                 doc.id in cur -> {
                     cur.remove(doc.id)
                     if (cur.isEmpty()) {
-                        ov.copy(isGenericGroupingMode = false, genericGroupingOrderedIds = emptyList())
+                        ov.copy(
+                            isGenericGroupingMode = false,
+                            genericGroupingOrderedIds = emptyList(),
+                            genericTargetGroupId = null
+                        )
                     } else {
                         ov.copy(genericGroupingOrderedIds = cur)
                     }
                 }
                 else -> {
+                    // When adding to an existing group, allow only ungrouped docs (or already-target-group docs),
+                    // and explicitly block group-to-group merges.
+                    if (targetGroupId != null && doc.groupId != null && doc.groupId != targetGroupId) {
+                        return@update ov.copy(snackbarMessage = "Cannot merge one group into another. Pick ungrouped documents.")
+                    }
+                    if (targetGroupId != null && doc.groupId == targetGroupId) {
+                        return@update ov
+                    }
+                    if (targetGroupId == null && doc.groupId != null) {
+                        return@update ov.copy(snackbarMessage = "Start from a grouped card to add into that group.")
+                    }
                     val first = allDocs.firstOrNull { it.id == cur.first() } ?: return@update ov
                     if (!sameSectionForPairing(first, doc)) return@update ov
                     ov.copy(genericGroupingOrderedIds = cur + doc.id)
@@ -871,6 +887,11 @@ class DocuVaultViewModel @Inject constructor(
         val ov = _overlay.value
         val ordered = ov.genericGroupingOrderedIds
         if (ordered.size < 2) return
+        // Adding into an existing group should be one-tap (no rename prompt).
+        if (ov.genericTargetGroupId != null) {
+            finalizeGroup(null)
+            return
+        }
         val state = uiState.value
         val docs = state.allDocuments.filter { it.id in ordered }
         val name = buildGroupName(docs, state.allDocuments)
@@ -890,7 +911,8 @@ class DocuVaultViewModel @Inject constructor(
             isPassportPairingMode        = false,
             passportPairingOrderedIds    = emptyList(),
             isGenericGroupingMode        = false,
-            genericGroupingOrderedIds   = emptyList()
+            genericGroupingOrderedIds    = emptyList(),
+            genericTargetGroupId         = null
         ) }
     }
 
@@ -959,10 +981,26 @@ class DocuVaultViewModel @Inject constructor(
             cancelAllGroupingModes()
             return
         }
-        val gid = UUID.randomUUID().toString()
+        val targetGid = ov.genericTargetGroupId
         viewModelScope.launch {
-            orderedIds.forEachIndexed { idx, id ->
-                documentRepository.updateGrouping(id, gid, groupName, idx, null, null)
+            if (targetGid != null) {
+                val state = uiState.value
+                val existingMembers = state.allDocuments
+                    .filter { it.groupId == targetGid }
+                    .sortedBy { it.groupPageIndex ?: Int.MAX_VALUE }
+                val existingIds = existingMembers.map { it.id }.toSet()
+                val toAdd = orderedIds.filter { it !in existingIds }
+                val existingName = existingMembers.firstOrNull()?.groupName
+                val startIndex = existingMembers.maxOfOrNull { it.groupPageIndex ?: -1 }?.plus(1)
+                    ?: existingMembers.size
+                toAdd.forEachIndexed { idx, id ->
+                    documentRepository.updateGrouping(id, targetGid, existingName, startIndex + idx, null, null)
+                }
+            } else {
+                val gid = UUID.randomUUID().toString()
+                orderedIds.forEachIndexed { idx, id ->
+                    documentRepository.updateGrouping(id, gid, groupName, idx, null, null)
+                }
             }
             clearPendingGroupState()
             cancelAllGroupingModes()

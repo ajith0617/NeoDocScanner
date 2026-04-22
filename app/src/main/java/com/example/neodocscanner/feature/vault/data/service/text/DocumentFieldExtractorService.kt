@@ -219,10 +219,6 @@ class DocumentFieldExtractorService @Inject constructor() {
         val pan = detectPANNumber(normed)
         if (pan != null) fields += DocumentField(label = "PAN Number", value = pan)
 
-        // Entity Type from 4th char of PAN
-        val entityType = pan?.let { panEntityType(it) }
-        if (entityType != null) fields += DocumentField(label = "Entity Type", value = entityType)
-
         // PAN line index for positional extraction
         val panLineIdx = lines.indexOfFirst {
             Regex("""\b[A-Z]{5}\d{4}[A-Z]\b""").containsMatchIn(it)
