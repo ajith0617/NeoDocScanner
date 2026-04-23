@@ -88,7 +88,7 @@ fun SectionCard(
     onScanToSection: (String) -> Unit = {},
     onLongPressSection: (String) -> Unit = {},
     onToggleSectionSelection: (String) -> Unit = {},
-    /** Gallery columns per row (2–4). */
+    /** Gallery columns per row (2–3). */
     gridColumns: Int = 2,
     modifier: Modifier = Modifier
 ) {
@@ -217,7 +217,7 @@ fun SectionCard(
                         !contextMenuState.isAadhaarPairingMode &&
                         !contextMenuState.isPassportPairingMode &&
                         !contextMenuState.isGenericGroupingMode
-                    val n = gridColumns.coerceIn(2, 4)
+                    val n = gridColumns.coerceIn(2, 3)
                     val chunks = documents.chunked(n)
                     chunks.forEachIndexed { rowIndex, rowDocs ->
                         Row(
