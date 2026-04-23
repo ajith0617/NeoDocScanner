@@ -124,29 +124,6 @@ fun VaultChecklistTab(
     }
 }
 
-@Composable
-private fun CategoriesHeader(completedSections: Int, totalSections: Int) {
-    if (totalSections == 0) return
-    Row(
-        modifier          = Modifier.fillMaxWidth().padding(bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text       = "Categories",
-            style      = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            modifier   = Modifier.weight(1f)
-        )
-        // Text(
-        //     text  = "$completedSections / $totalSections complete",
-        //     style = MaterialTheme.typography.labelMedium,
-        //     color = if (completedSections == totalSections)
-        //         MaterialTheme.colorScheme.primary
-        //     else
-        //         MaterialTheme.colorScheme.onSurfaceVariant
-        // )
-    }
-}
 
 @Composable
 private fun EmptyChecklistState(modifier: Modifier = Modifier) {

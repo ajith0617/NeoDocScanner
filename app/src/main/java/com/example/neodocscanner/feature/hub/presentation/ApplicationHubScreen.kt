@@ -121,23 +121,15 @@ fun ApplicationHubScreen(
                     pressedElevation = 10.dp
                 ),
                 icon = {
-                    Box(
-                        modifier = Modifier
-                            .size(24.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.18f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
                 },
                 text = {
                     Text(
-                        text = "New",
+                        text = "New application",
                         fontWeight = FontWeight.SemiBold
                     )
                 }

@@ -546,11 +546,12 @@ private fun DocumentActionSheetContent(
         if (document.documentClass == DocumentClass.PASSPORT && document.groupId == null) {
             ActionSheetButton("Pair with…") { onStartPassportPairing(document); onDismiss() }
         }
-        if (document.groupId == null &&
-            document.documentClass != DocumentClass.AADHAAR &&
+        if (document.documentClass != DocumentClass.AADHAAR &&
             document.documentClass != DocumentClass.PASSPORT
         ) {
-            ActionSheetButton("Group with…") { onStartGenericGrouping(document); onDismiss() }
+            ActionSheetButton(
+                if (document.groupId != null) "Add to this group…" else "Group with…"
+            ) { onStartGenericGrouping(document); onDismiss() }
         }
 
         ActionSheetButton("Move to Category…") { onShowMoveSheet(document.id); onDismiss() }

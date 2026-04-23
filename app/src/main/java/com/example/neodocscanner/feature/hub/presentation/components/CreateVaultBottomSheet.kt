@@ -2,6 +2,7 @@ package com.example.neodocscanner.feature.hub.presentation.components
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -16,20 +17,29 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.FlightTakeoff
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.MedicalServices
 import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.CurrencyRupee
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -38,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -88,8 +99,31 @@ fun CreateVaultBottomSheet(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Spacer(modifier = Modifier.height(14.dp))
+            OutlinedButton(
+                onClick = onScanQR,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.onSurface
+                )
+            ) {
+                Icon(
+                    imageVector = Icons.Default.QrCodeScanner,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Scan QR code", fontWeight = FontWeight.Medium)
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Templates",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(10.dp))
 
             // ── Template grid ─────────────────────────────────────────────────
             LazyVerticalGrid(
@@ -123,6 +157,14 @@ fun CreateVaultBottomSheet(
                 shape         = RoundedCornerShape(12.dp),
                 modifier      = Modifier.fillMaxWidth()
             )
+            selectedTemplate?.let { template ->
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = template.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -139,37 +181,7 @@ fun CreateVaultBottomSheet(
                     .height(50.dp),
                 shape    = RoundedCornerShape(12.dp)
             ) {
-                Text("Create Application", fontWeight = FontWeight.SemiBold)
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // QR scan row
-            Row(
-                modifier            = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment   = Alignment.CenterVertically
-            ) {
-                Text(
-                    text  = "or",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                TextButton(
-                    onClick = onScanQR,
-                    colors  = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.primary
-                    )
-                ) {
-                    Icon(
-                        imageVector        = Icons.Default.QrCodeScanner,
-                        contentDescription = null,
-                        modifier           = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Scan QR Code", fontWeight = FontWeight.SemiBold)
-                }
+                Text("Create application", fontWeight = FontWeight.SemiBold)
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -183,45 +195,82 @@ private fun TemplateCard(
     isSelected: Boolean,
     onSelect: () -> Unit
 ) {
+    val icon = templateIconFor(template.iconName)
     val containerColor = if (isSelected)
-        MaterialTheme.colorScheme.primaryContainer
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
     else
-        MaterialTheme.colorScheme.surfaceVariant
+        MaterialTheme.colorScheme.surface
 
-    ElevatedCard(
+    OutlinedCard(
         modifier  = Modifier
             .fillMaxWidth()
+            .height(112.dp)
             .clickable(onClick = onSelect),
         shape     = RoundedCornerShape(14.dp),
-        colors    = CardDefaults.elevatedCardColors(containerColor = containerColor),
-        elevation = CardDefaults.elevatedCardElevation(
-            defaultElevation = if (isSelected) 4.dp else 1.dp
+        colors    = CardDefaults.outlinedCardColors(containerColor = containerColor),
+        border = CardDefaults.outlinedCardBorder().copy(
+            brush = androidx.compose.ui.graphics.SolidColor(
+                if (isSelected) {
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+                } else {
+                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.8f)
+                }
+            )
         )
     ) {
         Column(
-            modifier            = Modifier.padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            Text(
-                text      = template.iconName.take(2).uppercase(),
-                style     = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color     = if (isSelected)
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                else
-                    MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(6.dp))
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                        } else {
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.70f)
+                        },
+                        shape = CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint      = if (isSelected)
+                        MaterialTheme.colorScheme.primary
+                    else
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text      = template.name,
-                style     = MaterialTheme.typography.labelSmall,
+                style     = MaterialTheme.typography.labelMedium,
                 color     = if (isSelected)
-                    MaterialTheme.colorScheme.onPrimaryContainer
+                    MaterialTheme.colorScheme.onSurface
                 else
                     MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
                 maxLines  = 2
             )
         }
+    }
+}
+
+private fun templateIconFor(iconName: String): ImageVector {
+    return when (iconName) {
+        "account_balance" -> Icons.Default.AccountBalance
+        "home" -> Icons.Default.Home
+        "currency_rupee" -> Icons.Default.CurrencyRupee
+        "language" -> Icons.Default.Language
+        "flight" -> Icons.Default.FlightTakeoff
+        "medical_services" -> Icons.Default.MedicalServices
+        else -> Icons.Default.FolderOpen
     }
 }

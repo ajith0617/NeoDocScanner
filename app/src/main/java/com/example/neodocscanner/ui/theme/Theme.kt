@@ -1,5 +1,8 @@
 package com.example.neodocscanner.ui.theme
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.os.Build
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -7,8 +10,12 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 
 private val DarkSurface = Color(0xFF232326)
 private val DarkSurfaceVariant = Color(0xFF2F2F33)
@@ -111,9 +118,28 @@ fun NeoDocScannerTheme(
         else -> LightColorScheme
     }
 
+    val view = LocalView.current
+    val context = LocalContext.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val activity = context.findActivity()
+            val window = activity?.window ?: return@SideEffect
+            // Keep status bar color stable after returning from ML Kit scanner.
+            // Explicitly pin to Coral token for consistent brand color.
+            window.statusBarColor = Coral.toArgb()
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
+        }
+    }
+
     MaterialTheme(
         colorScheme = colorScheme,
         typography = Typography,
         content = content
     )
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
