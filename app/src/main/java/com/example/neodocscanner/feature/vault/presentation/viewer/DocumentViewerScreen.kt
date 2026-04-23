@@ -82,6 +82,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.neodocscanner.core.domain.model.Document
 import com.example.neodocscanner.core.domain.model.TextRegion
+import com.example.neodocscanner.feature.vault.presentation.components.MoveToSectionSheet
 import com.example.neodocscanner.feature.vault.presentation.detail.DocumentDetailSheet
 import androidx.compose.ui.graphics.drawscope.Stroke
 import android.graphics.Bitmap
@@ -111,6 +112,7 @@ fun DocumentViewerScreen(
 
     val detailSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val removeSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val moveSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val document = state.document ?: return
 
@@ -240,6 +242,18 @@ fun DocumentViewerScreen(
                 Spacer(modifier = Modifier.height(12.dp))
             }
         }
+    }
+
+    // ── Move-to-category sheet ───────────────────────────────────────────────
+    if (state.showMoveSheet) {
+        val moveDoc = state.activeDocument ?: state.document
+        MoveToSectionSheet(
+            document = moveDoc,
+            sectionsWithDocs = state.sectionsWithDocs,
+            sheetState = moveSheetState,
+            onMove = viewModel::routeToSection,
+            onDismiss = viewModel::dismissMoveSheet
+        )
     }
 
     // ── Detail sheet ──────────────────────────────────────────────────────────
@@ -646,15 +660,13 @@ private fun ViewerTopBar(
             }
         }
 
-        // Move to category (uncategorised docs only)
-        if (state.isUncategorised) {
-            IconButton(onClick = onShowMoveSheet) {
-                Icon(
-                    imageVector        = Icons.AutoMirrored.Outlined.DriveFileMove,
-                    contentDescription = "Move to category",
-                    tint               = Color.White
-                )
-            }
+        // Move to category (all viewer contexts)
+        IconButton(onClick = onShowMoveSheet) {
+            Icon(
+                imageVector        = Icons.AutoMirrored.Outlined.DriveFileMove,
+                contentDescription = "Move to category",
+                tint               = Color.White
+            )
         }
 
         // Info button

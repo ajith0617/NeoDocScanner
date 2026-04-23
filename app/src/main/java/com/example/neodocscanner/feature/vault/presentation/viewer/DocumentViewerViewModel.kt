@@ -22,6 +22,7 @@ import com.example.neodocscanner.feature.vault.domain.syncDocumentClassForSectio
 import com.example.neodocscanner.feature.vault.domain.buildAadhaarGroupName
 import com.example.neodocscanner.feature.vault.domain.buildPassportGroupName
 import com.example.neodocscanner.feature.vault.data.service.text.DocumentNamingService
+import com.example.neodocscanner.feature.vault.presentation.SectionWithDocs
 import com.example.neodocscanner.navigation.Screen
 import com.google.gson.Gson
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -50,6 +51,7 @@ data class ViewerUiState(
     val showDetailSheet: Boolean = false,
     // Move-to-category sheet
     val showMoveSheet: Boolean = false,
+    val sectionsWithDocs: List<SectionWithDocs> = emptyList(),
     // Remove-from-group dialog
     val showRemoveFromGroupDialog: Boolean = false,
     // Group reorder preview flag (requires explicit Save)
@@ -135,6 +137,8 @@ class DocumentViewerViewModel @Inject constructor(
             } else {
                 persistedGroupOrderIds = emptyList()
             }
+
+            refreshSectionsWithDocs(doc.applicationInstanceId)
 
             // Auto-show OCR highlights on first open (disabled for now).
             // if (doc.isOcrProcessed && doc.decodedRegions.isNotEmpty()) {
@@ -303,36 +307,71 @@ class DocumentViewerViewModel @Inject constructor(
     fun dismissMoveSheet(){ _state.update { it.copy(showMoveSheet = false) } }
 
     fun routeToSection(sectionId: String?) {
-        val doc = _state.value.document ?: return
         viewModelScope.launch {
-            val instanceId = doc.applicationInstanceId
+            val current = _state.value
+            val activeDoc = current.activeDocument ?: current.document ?: return@launch
+            val toMove = if (current.isGrouped) current.allPages else listOf(activeDoc)
+            val instanceId = activeDoc.applicationInstanceId
             val sections = instanceId?.let { sectionRepository.getByInstanceOnce(it) }.orEmpty()
-            if (sections.isNotEmpty()) {
-                documentRepository.syncDocumentClassForSectionMove(doc, sectionId, sections)
+            for (doc in toMove) {
+                if (sections.isNotEmpty()) {
+                    documentRepository.syncDocumentClassForSectionMove(doc, sectionId, sections)
+                }
+                reExtractFieldsForCurrentClass(doc.id)
+                documentRepository.updateSectionId(doc.id, sectionId)
+                rerunMaskingAfterMove(doc.id)
+                tryAutoPairAadhaarAfterMove(doc.id, doc.applicationInstanceId ?: instanceId)
+                tryAutoPairPassportAfterMove(doc.id, doc.applicationInstanceId ?: instanceId)
             }
-            val reloaded = documentRepository.getById(doc.id)
-            val text = reloaded?.extractedText?.takeIf { it.isNotBlank() }
-            if (reloaded != null && text != null) {
-                val allDocs = documentRepository.getByInstanceOnce(reloaded.applicationInstanceId ?: "")
-                val backText = if (reloaded.documentClass == DocumentClass.PASSPORT && reloaded.groupId != null) {
-                    allDocs.firstOrNull { it.groupId == reloaded.groupId && it.id != reloaded.id }
-                        ?.extractedText
-                        .orEmpty()
-                } else ""
-                val extraction = fieldExtractor.extract(
-                    documentClass = reloaded.documentClass,
-                    text = text,
-                    backText = backText
+            val updatedPages = toMove.mapNotNull { moved -> documentRepository.getById(moved.id) }
+            _state.update { prev ->
+                val updatedById = updatedPages.associateBy { it.id }
+                val updatedRoot = prev.document?.let { updatedById[it.id] ?: it }
+                val updatedGroup = prev.groupPages.map { updatedById[it.id] ?: it }
+                prev.copy(
+                    document = updatedRoot,
+                    groupPages = updatedGroup,
+                    showMoveSheet = false
                 )
-                documentRepository.updateExtractedFields(reloaded.id, gson.toJson(extraction))
             }
-            documentRepository.updateSectionId(doc.id, sectionId)
-            rerunMaskingAfterMove(doc.id)
-            tryAutoPairAadhaarAfterMove(doc.id, doc.applicationInstanceId)
-            tryAutoPairPassportAfterMove(doc.id, doc.applicationInstanceId)
-            val updated = documentRepository.getById(doc.id)
-            _state.update { it.copy(document = updated, showMoveSheet = false) }
+            refreshSectionsWithDocs(instanceId)
         }
+    }
+
+    private suspend fun reExtractFieldsForCurrentClass(documentId: String) {
+        val updated = documentRepository.getById(documentId) ?: return
+        val text = updated.extractedText?.takeIf { it.isNotBlank() } ?: return
+        val allDocs = updated.applicationInstanceId?.let { documentRepository.getByInstanceOnce(it) }.orEmpty()
+        val backText = if (updated.documentClass == DocumentClass.PASSPORT && updated.groupId != null) {
+            allDocs.firstOrNull { it.groupId == updated.groupId && it.id != updated.id }
+                ?.extractedText
+                .orEmpty()
+        } else ""
+        val fields = fieldExtractor.extract(
+            documentClass = updated.documentClass,
+            text = text,
+            backText = backText
+        )
+        documentRepository.updateExtractedFields(updated.id, gson.toJson(fields))
+    }
+
+    private suspend fun refreshSectionsWithDocs(instanceId: String?) {
+        if (instanceId.isNullOrBlank()) {
+            _state.update { it.copy(sectionsWithDocs = emptyList()) }
+            return
+        }
+        val sections = sectionRepository.getByInstanceOnce(instanceId)
+        val allDocs = documentRepository.getByInstanceOnce(instanceId)
+        val mapped = sections.map { section ->
+            val docs = allDocs.filter { it.sectionId == section.id && !it.isArchivedByExport }
+            SectionWithDocs(
+                section = section,
+                documents = docs,
+                allDocumentsInSection = docs,
+                totalDocumentCount = docs.size
+            )
+        }
+        _state.update { it.copy(sectionsWithDocs = mapped) }
     }
 
     // ── Remove from group ─────────────────────────────────────────────────────
