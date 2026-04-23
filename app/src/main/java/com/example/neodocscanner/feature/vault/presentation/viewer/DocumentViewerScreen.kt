@@ -4,14 +4,18 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -24,14 +28,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ChevronLeft
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.filled.Info
@@ -46,7 +51,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.SheetState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -55,14 +59,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -72,15 +78,15 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalDensity
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.neodocscanner.core.domain.model.Document
 import com.example.neodocscanner.core.domain.model.TextRegion
 import com.example.neodocscanner.feature.vault.presentation.detail.DocumentDetailSheet
-import kotlinx.coroutines.launch
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.drawscope.Stroke
 import android.graphics.Bitmap
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 /**
@@ -105,7 +111,6 @@ fun DocumentViewerScreen(
 
     val detailSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val removeSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val scope = rememberCoroutineScope()
 
     val document = state.document ?: return
 
@@ -144,18 +149,33 @@ fun DocumentViewerScreen(
                 )
             }
 
-            // ── Page indicator (bottom-centre for grouped docs) ───────────────
+            // ── Bottom group reorder strip (grouped docs only) ─────────────────
             if (state.isGrouped) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = 100.dp)
+                        .windowInsetsPadding(WindowInsets.navigationBars)
+                        .padding(bottom = 12.dp)
                 ) {
-                    PageIndicatorPill(
-                        state    = state,
-                        onPrev   = { viewModel.goToPage(state.currentPageIndex - 1) },
-                        onNext   = { viewModel.goToPage(state.currentPageIndex + 1) }
+                    GroupReorderThumbnailStrip(
+                        pages = state.allPages,
+                        activeDocumentId = state.activeDocument?.id,
+                        thumbnails = state.imageBitmaps,
+                        onSelectPage = viewModel::goToPageByDocumentId,
+                        onReorder = { orderedIds -> viewModel.previewGroupReorder(orderedIds) }
                     )
+                }
+            }
+
+            if (state.isGrouped && state.hasPendingReorder) {
+                Button(
+                    onClick = viewModel::saveGroupReorder,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .windowInsetsPadding(WindowInsets.navigationBars)
+                        .padding(end = 16.dp, bottom = 116.dp)
+                ) {
+                    Text("Save")
                 }
             }
 
@@ -288,6 +308,7 @@ private fun GroupedPageViewer(
 ) {
     var tappedRegion by remember { mutableStateOf<TextRegion?>(null) }
     val allPages = state.allPages
+    val latestPageIndex by rememberUpdatedState(state.currentPageIndex)
     val pagerState = rememberPagerState(
         initialPage = state.currentPageIndex,
         pageCount   = { allPages.size }
@@ -296,12 +317,12 @@ private fun GroupedPageViewer(
     // Sync pager ↔ ViewModel
     LaunchedEffect(state.currentPageIndex) {
         if (pagerState.currentPage != state.currentPageIndex) {
-            pagerState.animateScrollToPage(state.currentPageIndex)
+            pagerState.scrollToPage(state.currentPageIndex)
         }
     }
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.currentPage }.collect { page ->
-            if (page != state.currentPageIndex) {
+            if (page != latestPageIndex) {
                 viewModel.goToPage(page)
                 tappedRegion = null
             }
@@ -364,7 +385,7 @@ private fun ZoomableImage(
     onSwipeNext: (() -> Unit)? = null,
     onRegionTapped: (TextRegion?) -> Unit
 ) {
-    var scale  by remember { mutableFloatStateOf(1f) }
+    var scale  by remember { mutableStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
 
     val transformState = rememberTransformableState { zoomChange, panChange, _ ->
@@ -647,55 +668,209 @@ private fun ViewerTopBar(
     }
 }
 
-// ── Page indicator pill ───────────────────────────────────────────────────────
+// ── Group thumbnail reorder strip ─────────────────────────────────────────────
 
 @Composable
-private fun PageIndicatorPill(
-    state: ViewerUiState,
-    onPrev: () -> Unit,
-    onNext: () -> Unit
+private fun GroupReorderThumbnailStrip(
+    pages: List<Document>,
+    activeDocumentId: String?,
+    thumbnails: Map<String, Bitmap>,
+    onSelectPage: (String) -> Unit,
+    onReorder: (List<String>) -> Unit
 ) {
+    val orderedDocs = remember(pages) { mutableStateListOf<Document>().apply { addAll(pages) } }
+    val previewDocs = remember { mutableStateListOf<Document>() }
+    var draggingDocId by remember { mutableStateOf<String?>(null) }
+    var draggingPreviewIndex by remember { mutableStateOf(-1) }
+    var dragOffsetX by remember { mutableStateOf(0f) }
+    var autoScrollJob by remember { mutableStateOf<Job?>(null) }
+    val itemWidthPx = with(LocalDensity.current) { 82.dp.toPx() }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    // Keep local row order aligned when ViewModel state updates externally.
+    LaunchedEffect(pages) {
+        orderedDocs.clear()
+        orderedDocs.addAll(pages)
+        if (draggingDocId == null) {
+            previewDocs.clear()
+            previewDocs.addAll(pages)
+        }
+    }
+
+    val displayedDocs = if (draggingDocId != null) previewDocs else orderedDocs
+
     Surface(
-        shape = CircleShape,
-        color = Color.White.copy(alpha = 0.15f)
+        shape = RoundedCornerShape(14.dp),
+        color = Color.Black.copy(alpha = 0.42f)
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        LazyRow(
+            state = listState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 10.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            IconButton(
-                onClick  = onPrev,
-                enabled  = state.currentPageIndex > 0,
-                modifier = Modifier.size(24.dp)
-            ) {
-                Icon(
-                    Icons.Default.ChevronLeft,
-                    contentDescription = "Previous",
-                    tint   = if (state.currentPageIndex > 0) Color.White else Color.White.copy(0.25f),
-                    modifier = Modifier.size(16.dp)
+            itemsIndexed(displayedDocs, key = { _, doc -> doc.id }) { index, doc ->
+                val isActive = activeDocumentId == doc.id
+                val isDragging = doc.id == draggingDocId
+                val scale = if (isDragging) 1.08f else 1f
+                val thumbAlpha = if (isDragging) 0.94f else 1f
+
+                Box(
+                    modifier = Modifier
+                        .size(width = 72.dp, height = 92.dp)
+                        .graphicsLayer {
+                            translationX = if (isDragging) dragOffsetX else 0f
+                            scaleX = scale
+                            scaleY = scale
+                            alpha = thumbAlpha
+                            shadowElevation = if (isDragging) 14f else 0f
+                        }
+                        .pointerInput(doc.id) {
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = {
+                                    draggingDocId = doc.id
+                                    draggingPreviewIndex = index
+                                    dragOffsetX = 0f
+                                    previewDocs.clear()
+                                    previewDocs.addAll(orderedDocs)
+                                },
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    if (draggingDocId == null) return@detectDragGesturesAfterLongPress
+                                    dragOffsetX += dragAmount.x
+
+                                    val visible = listState.layoutInfo.visibleItemsInfo
+                                    val firstVisible = visible.firstOrNull()?.index ?: 0
+                                    val lastVisible = visible.lastOrNull()?.index ?: -1
+                                    val atStartEdge = draggingPreviewIndex <= firstVisible
+                                    val atEndEdge = draggingPreviewIndex >= lastVisible
+                                    when {
+                                        dragAmount.x < 0 && atStartEdge && firstVisible > 0 -> {
+                                            if (autoScrollJob?.isActive != true) {
+                                                autoScrollJob = scope.launch {
+                                                    listState.animateScrollToItem((firstVisible - 1).coerceAtLeast(0))
+                                                }
+                                            }
+                                        }
+                                        dragAmount.x > 0 && atEndEdge && lastVisible < previewDocs.lastIndex -> {
+                                            if (autoScrollJob?.isActive != true) {
+                                                autoScrollJob = scope.launch {
+                                                    listState.animateScrollToItem((lastVisible + 1).coerceAtMost(previewDocs.lastIndex))
+                                                }
+                                            }
+                                        }
+                                        else -> autoScrollJob?.cancel()
+                                    }
+
+                                    val from = draggingPreviewIndex
+                                    val step = (dragOffsetX / itemWidthPx).toInt()
+                                    if (step != 0 && from in previewDocs.indices) {
+                                        val to = (from + step).coerceIn(0, previewDocs.lastIndex)
+                                        if (to != from) {
+                                            val moved = previewDocs.removeAt(from)
+                                            previewDocs.add(to, moved)
+                                            draggingPreviewIndex = to
+                                            dragOffsetX -= (to - from) * itemWidthPx
+                                        }
+                                    }
+                                },
+                                onDragEnd = {
+                                    autoScrollJob?.cancel()
+                                    val oldIds = orderedDocs.map { it.id }
+                                    val newIds = previewDocs.map { it.id }
+                                    if (newIds != oldIds) {
+                                        orderedDocs.clear()
+                                        orderedDocs.addAll(previewDocs)
+                                        onReorder(newIds)
+                                    }
+                                    draggingDocId = null
+                                    draggingPreviewIndex = -1
+                                    dragOffsetX = 0f
+                                },
+                                onDragCancel = {
+                                    autoScrollJob?.cancel()
+                                    draggingDocId = null
+                                    draggingPreviewIndex = -1
+                                    dragOffsetX = 0f
+                                }
+                            )
+                        }
+                        .pointerInput(doc.id) {
+                            detectTapGestures {
+                                onSelectPage(doc.id)
+                            }
+                        }
+                ) {
+                    ViewerThumbnailItem(
+                        bitmap = thumbnails[doc.id],
+                        index = index + 1,
+                        isActive = isActive
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ViewerThumbnailItem(
+    bitmap: Bitmap?,
+    index: Int,
+    isActive: Boolean
+) {
+    val borderColor = if (isActive) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        Color.White.copy(alpha = 0.36f)
+    }
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 66.dp, height = 74.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .border(
+                    width = if (isActive) 2.dp else 1.dp,
+                    color = borderColor,
+                    shape = RoundedCornerShape(10.dp)
+                )
+                .background(Color.Black.copy(alpha = 0.35f)),
+            contentAlignment = Alignment.Center
+        ) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = Color.White.copy(alpha = 0.9f)
                 )
             }
 
-            Text(
-                text  = "${state.currentPageIndex + 1} of ${state.pageCount} — " +
-                        state.pageLabel(state.currentPageIndex),
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = Color.White
-            )
-
-            IconButton(
-                onClick  = onNext,
-                enabled  = state.currentPageIndex < state.pageCount - 1,
-                modifier = Modifier.size(24.dp)
+            Surface(
+                shape = CircleShape,
+                color = if (isActive) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.65f),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(4.dp)
             ) {
-                Icon(
-                    Icons.Default.ChevronRight,
-                    contentDescription = "Next",
-                    tint   = if (state.currentPageIndex < state.pageCount - 1)
-                        Color.White else Color.White.copy(0.25f),
-                    modifier = Modifier.size(16.dp)
+                Text(
+                    text = "$index",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
                 )
             }
         }

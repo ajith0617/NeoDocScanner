@@ -78,16 +78,16 @@ fun VaultChecklistTab(
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         item {
-            CategoriesHeader(
-                completedSections = uiState.completedSectionCount,
-                totalSections     = uiState.sectionsWithDocs.size
-            )
+//            CategoriesHeader(
+//                completedSections = uiState.completedSectionCount,
+//                totalSections     = uiState.sectionsWithDocs.size
+//            )
         }
 
         items(uiState.sectionsWithDocs, key = { it.section.id }) { swd ->
             SectionCard(
                 sectionWithDocs          = swd,
-                isCollapsed              = swd.section.id in uiState.collapsedSectionIds,
+                isCollapsed              = swd.section.id !in uiState.collapsedSectionIds,
                 isPulsing                = swd.section.id in uiState.pulsingSectionIds,
                 onToggleCollapse         = { onToggleCollapse(swd.section.id) },
                 onOpenDocument           = onOpenDocument,

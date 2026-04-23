@@ -51,7 +51,9 @@ data class ViewerUiState(
     // Move-to-category sheet
     val showMoveSheet: Boolean = false,
     // Remove-from-group dialog
-    val showRemoveFromGroupDialog: Boolean = false
+    val showRemoveFromGroupDialog: Boolean = false,
+    // Group reorder preview flag (requires explicit Save)
+    val hasPendingReorder: Boolean = false
 ) {
     /** The document currently displayed in the viewer. */
     val activeDocument: Document?
@@ -108,6 +110,7 @@ class DocumentViewerViewModel @Inject constructor(
 
     private val documentId: String = checkNotNull(savedStateHandle[Screen.DocumentViewer.ARG_DOCUMENT_ID])
     private val gson = Gson()
+    private var persistedGroupOrderIds: List<String> = emptyList()
 
     private val _state = MutableStateFlow(ViewerUiState())
     val state: StateFlow<ViewerUiState> = _state.asStateFlow()
@@ -121,13 +124,16 @@ class DocumentViewerViewModel @Inject constructor(
     private fun loadDocument() {
         viewModelScope.launch {
             val doc = documentRepository.getById(documentId) ?: return@launch
-            _state.update { it.copy(document = doc, isLoading = false) }
+            _state.update { it.copy(document = doc, isLoading = false, hasPendingReorder = false) }
 
             // Load group members if doc belongs to a group
             if (doc.groupId != null) {
                 val allDocs = documentRepository.getByInstanceOnce(doc.applicationInstanceId ?: "")
                 val groupMembers = allDocs.filter { it.groupId == doc.groupId && it.id != doc.id }
                 _state.update { it.copy(groupPages = groupMembers) }
+                persistedGroupOrderIds = _state.value.allPages.map { it.id }
+            } else {
+                persistedGroupOrderIds = emptyList()
             }
 
             // Auto-show OCR highlights on first open (disabled for now).
@@ -162,6 +168,74 @@ class DocumentViewerViewModel @Inject constructor(
     fun goToPage(index: Int) {
         val clamped = index.coerceIn(0, _state.value.pageCount - 1)
         _state.update { it.copy(currentPageIndex = clamped, showHighlights = false) }
+    }
+
+    fun goToPageByDocumentId(documentId: String) {
+        val idx = _state.value.allPages.indexOfFirst { it.id == documentId }
+        if (idx >= 0) {
+            goToPage(idx)
+        }
+    }
+
+    fun previewGroupReorder(orderedIds: List<String>) {
+        val current = _state.value
+        if (!current.isGrouped) return
+        if (orderedIds.isEmpty()) return
+
+        val existing = current.allPages
+        val existingIds = existing.map { it.id }
+        if (orderedIds.toSet() != existingIds.toSet()) return
+
+        val currentActiveId = current.activeDocument?.id
+        val byId = existing.associateBy { it.id }
+        val reordered = orderedIds.mapNotNull { byId[it] }
+        if (reordered.size != existing.size) return
+
+        val withUpdatedIndexes = reordered.mapIndexed { idx, doc ->
+            doc.copy(
+                pageIndex = idx,
+                groupPageIndex = idx
+            )
+        }
+
+        val rootId = current.document?.id
+        val updatedRoot = withUpdatedIndexes.firstOrNull { it.id == rootId } ?: current.document
+        val updatedGroup = withUpdatedIndexes.filterNot { it.id == rootId }
+        val newPageIndex = currentActiveId
+            ?.let { activeId -> withUpdatedIndexes.indexOfFirst { it.id == activeId } }
+            ?.takeIf { it >= 0 }
+            ?: 0
+
+        _state.update {
+            it.copy(
+                document = updatedRoot,
+                groupPages = updatedGroup,
+                currentPageIndex = newPageIndex,
+                hasPendingReorder = withUpdatedIndexes.map { d -> d.id } != persistedGroupOrderIds
+            )
+        }
+    }
+
+    fun saveGroupReorder() {
+        val current = _state.value
+        if (!current.isGrouped || !current.hasPendingReorder) return
+
+        val orderedPages = current.allPages
+        viewModelScope.launch {
+            orderedPages.forEachIndexed { idx, doc ->
+                documentRepository.updatePageIndex(doc.id, idx)
+                documentRepository.updateGrouping(
+                    id = doc.id,
+                    groupId = doc.groupId,
+                    groupName = doc.groupName,
+                    groupPageIndex = idx,
+                    aadhaarSide = doc.aadhaarSide,
+                    passportSide = doc.passportSide
+                )
+            }
+            persistedGroupOrderIds = orderedPages.map { it.id }
+            _state.update { it.copy(hasPendingReorder = false) }
+        }
     }
 
     // ── OCR toggle ────────────────────────────────────────────────────────────
