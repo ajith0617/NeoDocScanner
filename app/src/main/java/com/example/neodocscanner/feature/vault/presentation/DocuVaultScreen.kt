@@ -49,7 +49,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FloatingActionButton
@@ -369,28 +368,9 @@ fun DocuVaultScreen(
                                     expanded = vaultOverflowMenuExpanded,
                                     onDismissRequest = { vaultOverflowMenuExpanded = false }
                                 ) {
-                                    DropdownMenuItem(
-                                        text = { Text("Select all") },
-                                        leadingIcon = {
-                                            Icon(
-                                                Icons.Default.SelectAll,
-                                                contentDescription = null
-                                            )
-                                        },
-                                        onClick = {
-                                            vaultOverflowMenuExpanded = false
-                                            viewModel.selectAllInCurrentVaultTab(
-                                                categoriesTab = pagerState.currentPage == 0,
-                                                sectionsWithDocs = uiState.sectionsWithDocs,
-                                                inboxDocs = uiState.inboxDocuments
-                                            )
-                                        }
-                                    )
-                                    HorizontalDivider()
                                     listOf(
                                         2 to "2 per row",
-                                        3 to "3 per row",
-                                        4 to "4 per row"
+                                        3 to "3 per row"
                                     ).forEach { (cols, label) ->
                                         DropdownMenuItem(
                                             text = { Text(label) },

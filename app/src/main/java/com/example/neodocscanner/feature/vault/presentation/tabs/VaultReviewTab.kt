@@ -65,14 +65,12 @@ fun VaultReviewTab(
         return
     }
 
-    val cols = gridColumns.coerceIn(2, 4)
+    val cols = gridColumns.coerceIn(2, 3)
     val gridSpacing = when (cols) {
-        4 -> 4.dp
         3 -> 6.dp
         else -> 10.dp
     }
     val horizontalPadding = when (cols) {
-        4 -> 6.dp
         3 -> 8.dp
         else -> 12.dp
     }

@@ -124,9 +124,9 @@ fun DocumentGalleryCard(
     val context = LocalContext.current
     var showContextMenu by remember { mutableStateOf(false) }
     var showClassPicker by remember { mutableStateOf(false) }
-    val safeGridColumns = gridColumns.coerceIn(2, 4)
+    val safeGridColumns = gridColumns.coerceIn(2, 3)
     val compactGrid = safeGridColumns >= 3
-    val denseGrid = safeGridColumns >= 4
+    val denseGrid = false
     val cardCorner = if (compactGrid) 10.dp else 12.dp
     val topBadgePadding = if (compactGrid) 5.dp else 7.dp
     val bottomTextPaddingHorizontal = if (compactGrid) 6.dp else 9.dp
@@ -1157,8 +1157,7 @@ fun ClassificationChangeSheetContent(
 private val Document.cardLabel: String
     get() = displayTitle
 
-private fun Document.cardMetaLabel(gridColumns: Int): String? = when (gridColumns.coerceIn(2, 4)) {
-    4 -> null
+private fun Document.cardMetaLabel(gridColumns: Int): String? = when (gridColumns.coerceIn(2, 3)) {
     3 -> compactFormattedDate
     else -> "${formattedSize} · ${formattedDate}"
 }

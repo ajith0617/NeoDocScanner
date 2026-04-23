@@ -126,7 +126,7 @@ data class VaultUiState(
     val sharePdfDocId: String?                   = null,
     val pendingRoutingConflicts: List<SectionRoutingConflict> = emptyList(),
 
-    /** Gallery grid columns (2–4) for category sections and Uncategorised tab. */
+    /** Gallery grid columns (2–3) for category sections and Uncategorised tab. */
     val galleryGridColumns: Int                  = 2,
 
     val snackbarMessage: String?                 = null
@@ -244,8 +244,9 @@ class DocuVaultViewModel @Inject constructor(
     private val _overlay = MutableStateFlow(VaultOverlay())
 
     init {
-        savedState.get<Int>(KEY_VAULT_GALLERY_COLUMNS)?.takeIf { it in 2..4 }?.let { cols ->
-            _overlay.update { it.copy(galleryGridColumns = cols) }
+        savedState.get<Int>(KEY_VAULT_GALLERY_COLUMNS)?.let { cols ->
+            val c = cols.coerceIn(2, 3)
+            _overlay.update { it.copy(galleryGridColumns = c) }
         }
     }
 
@@ -323,7 +324,7 @@ class DocuVaultViewModel @Inject constructor(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), VaultUiState(isLoading = true))
 
     fun setGalleryGridColumns(columns: Int) {
-        val c = columns.coerceIn(2, 4)
+        val c = columns.coerceIn(2, 3)
         savedState[KEY_VAULT_GALLERY_COLUMNS] = c
         _overlay.update { it.copy(galleryGridColumns = c) }
     }
