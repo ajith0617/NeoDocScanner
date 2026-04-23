@@ -1,5 +1,7 @@
 package com.example.neodocscanner.feature.vault.presentation.viewer
 
+import android.graphics.Bitmap
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -79,13 +81,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.neodocscanner.core.domain.model.Document
 import com.example.neodocscanner.core.domain.model.TextRegion
 import com.example.neodocscanner.feature.vault.presentation.components.MoveToSectionSheet
 import com.example.neodocscanner.feature.vault.presentation.detail.DocumentDetailSheet
 import androidx.compose.ui.graphics.drawscope.Stroke
-import android.graphics.Bitmap
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -109,12 +111,18 @@ fun DocumentViewerScreen(
     viewModel: DocumentViewerViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
+    val context = LocalContext.current
 
     val detailSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val removeSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val moveSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val document = state.document ?: return
+    LaunchedEffect(state.alertMessage) {
+        val message = state.alertMessage ?: return@LaunchedEffect
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        viewModel.consumeAlert()
+    }
 
     Box(
         modifier = Modifier
@@ -164,20 +172,8 @@ fun DocumentViewerScreen(
                         activeDocumentId = state.activeDocument?.id,
                         thumbnails = state.imageBitmaps,
                         onSelectPage = viewModel::goToPageByDocumentId,
-                        onReorder = { orderedIds -> viewModel.previewGroupReorder(orderedIds) }
+                        onReorder = viewModel::reorderGroup
                     )
-                }
-            }
-
-            if (state.isGrouped && state.hasPendingReorder) {
-                Button(
-                    onClick = viewModel::saveGroupReorder,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .windowInsetsPadding(WindowInsets.navigationBars)
-                        .padding(end = 16.dp, bottom = 116.dp)
-                ) {
-                    Text("Save")
                 }
             }
 

@@ -54,8 +54,8 @@ data class ViewerUiState(
     val sectionsWithDocs: List<SectionWithDocs> = emptyList(),
     // Remove-from-group dialog
     val showRemoveFromGroupDialog: Boolean = false,
-    // Group reorder preview flag (requires explicit Save)
-    val hasPendingReorder: Boolean = false
+    // One-shot viewer alert message
+    val alertMessage: String? = null
 ) {
     /** The document currently displayed in the viewer. */
     val activeDocument: Document?
@@ -126,7 +126,7 @@ class DocumentViewerViewModel @Inject constructor(
     private fun loadDocument() {
         viewModelScope.launch {
             val doc = documentRepository.getById(documentId) ?: return@launch
-            _state.update { it.copy(document = doc, isLoading = false, hasPendingReorder = false) }
+            _state.update { it.copy(document = doc, isLoading = false) }
 
             // Load group members if doc belongs to a group
             if (doc.groupId != null) {
@@ -181,7 +181,7 @@ class DocumentViewerViewModel @Inject constructor(
         }
     }
 
-    fun previewGroupReorder(orderedIds: List<String>) {
+    fun reorderGroup(orderedIds: List<String>) {
         val current = _state.value
         if (!current.isGrouped) return
         if (orderedIds.isEmpty()) return
@@ -194,6 +194,7 @@ class DocumentViewerViewModel @Inject constructor(
         val byId = existing.associateBy { it.id }
         val reordered = orderedIds.mapNotNull { byId[it] }
         if (reordered.size != existing.size) return
+        if (orderedIds == persistedGroupOrderIds) return
 
         val withUpdatedIndexes = reordered.mapIndexed { idx, doc ->
             doc.copy(
@@ -214,19 +215,12 @@ class DocumentViewerViewModel @Inject constructor(
             it.copy(
                 document = updatedRoot,
                 groupPages = updatedGroup,
-                currentPageIndex = newPageIndex,
-                hasPendingReorder = withUpdatedIndexes.map { d -> d.id } != persistedGroupOrderIds
+                currentPageIndex = newPageIndex
             )
         }
-    }
 
-    fun saveGroupReorder() {
-        val current = _state.value
-        if (!current.isGrouped || !current.hasPendingReorder) return
-
-        val orderedPages = current.allPages
         viewModelScope.launch {
-            orderedPages.forEachIndexed { idx, doc ->
+            withUpdatedIndexes.forEachIndexed { idx, doc ->
                 documentRepository.updatePageIndex(doc.id, idx)
                 documentRepository.updateGrouping(
                     id = doc.id,
@@ -237,9 +231,13 @@ class DocumentViewerViewModel @Inject constructor(
                     passportSide = doc.passportSide
                 )
             }
-            persistedGroupOrderIds = orderedPages.map { it.id }
-            _state.update { it.copy(hasPendingReorder = false) }
+            persistedGroupOrderIds = withUpdatedIndexes.map { it.id }
+            _state.update { it.copy(alertMessage = "Reordered successfully") }
         }
+    }
+
+    fun consumeAlert() {
+        _state.update { it.copy(alertMessage = null) }
     }
 
     // ── OCR toggle ────────────────────────────────────────────────────────────
