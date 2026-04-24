@@ -128,6 +128,8 @@ data class VaultUiState(
 
     /** Gallery grid columns (2–3) for category sections and Uncategorised tab. */
     val galleryGridColumns: Int                  = 2,
+    /** docId -> size of duplicate cluster inside the same category. */
+    val duplicateClusterSizes: Map<String, Int>  = emptyMap(),
 
     val snackbarMessage: String?                 = null
 ) {
@@ -260,6 +262,7 @@ class DocuVaultViewModel @Inject constructor(
         _overlay
     ) { docs: List<Document>, sections: List<ApplicationSection>, inst: ApplicationInstance?, ov: VaultOverlay ->
         val nonArchivedDocs = docs.filter { !it.isArchivedByExport }
+        val duplicateClusterSizes = computeDuplicateClusters(nonArchivedDocs)
         val inboxDocs = computeVisibleDocuments(
             nonArchivedDocs.filter { it.sectionId == null }
         )
@@ -319,7 +322,8 @@ class DocuVaultViewModel @Inject constructor(
             showPdfViewerDocId           = ov.showPdfViewerDocId,
             sharePdfDocId                = ov.sharePdfDocId,
             snackbarMessage              = ov.snackbarMessage,
-            galleryGridColumns           = ov.galleryGridColumns
+            galleryGridColumns           = ov.galleryGridColumns,
+            duplicateClusterSizes        = duplicateClusterSizes
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), VaultUiState(isLoading = true))
 
@@ -1740,5 +1744,126 @@ class DocuVaultViewModel @Inject constructor(
     private fun sha256(value: String): String {
         val bytes = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
         return bytes.joinToString("") { "%02x".format(it) }
+    }
+
+    private fun computeDuplicateClusters(documents: List<Document>): Map<String, Int> {
+        if (documents.size < 2) return emptyMap()
+        val byCategory = documents.groupBy { it.sectionId ?: "__inbox__" }
+        val parent = mutableMapOf<String, String>()
+
+        fun find(x: String): String {
+            val p = parent[x]
+            return if (p == null || p == x) {
+                parent[x] = x
+                x
+            } else {
+                val root = find(p)
+                parent[x] = root
+                root
+            }
+        }
+
+        fun union(a: String, b: String) {
+            val ra = find(a)
+            val rb = find(b)
+            if (ra != rb) parent[rb] = ra
+        }
+
+        byCategory.values.forEach { categoryDocs ->
+            val fingerprints = categoryDocs.associate { it.id to duplicateFingerprint(it) }
+            for (i in 0 until categoryDocs.size) {
+                val a = categoryDocs[i]
+                for (j in i + 1 until categoryDocs.size) {
+                    val b = categoryDocs[j]
+                    if (isDuplicatePair(a, b, fingerprints.getValue(a.id), fingerprints.getValue(b.id))) {
+                        union(a.id, b.id)
+                    }
+                }
+            }
+        }
+
+        val clusters = documents.groupBy { find(it.id) }.values.filter { it.size >= 2 }
+        if (clusters.isEmpty()) return emptyMap()
+        return buildMap {
+            clusters.forEach { cluster ->
+                val size = cluster.size
+                cluster.forEach { put(it.id, size) }
+            }
+        }
+    }
+
+    private data class DuplicateFingerprint(
+        val idTokens: Set<String>,
+        val textTokens: Set<String>
+    )
+
+    private fun duplicateFingerprint(doc: Document): DuplicateFingerprint {
+        val idTokens = buildSet {
+            doc.decodedFields.forEach { field ->
+                addAll(extractIdentityTokens(field.value))
+            }
+            addAll(extractIdentityTokens(doc.extractedText.orEmpty()))
+        }
+        val textTokens = normaliseOcrTokens(doc.extractedText.orEmpty())
+        return DuplicateFingerprint(idTokens = idTokens, textTokens = textTokens)
+    }
+
+    private fun isDuplicatePair(
+        a: Document,
+        b: Document,
+        fa: DuplicateFingerprint,
+        fb: DuplicateFingerprint
+    ): Boolean {
+        if (a.id == b.id) return false
+        if (a.groupId != null && a.groupId == b.groupId) return false
+        if (a.documentClass != b.documentClass) return false
+
+        val sharedIds = fa.idTokens intersect fb.idTokens
+        if (sharedIds.isNotEmpty()) return true
+
+        val similarity = tokenJaccardSimilarity(fa.textTokens, fb.textTokens)
+        if (similarity >= 0.88f) return true
+
+        val closeName = a.displayTitle.trim().equals(b.displayTitle.trim(), ignoreCase = true)
+        return closeName && similarity >= 0.65f
+    }
+
+    private fun extractIdentityTokens(raw: String): Set<String> {
+        if (raw.isBlank()) return emptySet()
+        val normalized = raw.uppercase()
+        return Regex("""\b[A-Z0-9]{6,}\b""")
+            .findAll(normalized)
+            .map { it.value }
+            .filter { token ->
+                token.any { it.isDigit() } &&
+                    !token.startsWith("HTTP") &&
+                    token != "INDIA" &&
+                    token != "IDENTITY"
+            }
+            .toSet()
+    }
+
+    private fun normaliseOcrTokens(raw: String): Set<String> {
+        if (raw.isBlank()) return emptySet()
+        val stopWords = setOf(
+            "election", "commission", "india", "identity", "card",
+            "government", "republic", "photo", "address", "name", "father",
+            "mother", "husband", "sex", "male", "female", "dob", "birth",
+            "year", "duplicate", "document", "of", "the", "and"
+        )
+        return raw.lowercase()
+            .replace(Regex("[^a-z0-9 ]"), " ")
+            .split(Regex("\\s+"))
+            .asSequence()
+            .map { it.trim() }
+            .filter { it.length >= 3 && it !in stopWords }
+            .toSet()
+    }
+
+    private fun tokenJaccardSimilarity(a: Set<String>, b: Set<String>): Float {
+        if (a.isEmpty() || b.isEmpty()) return 0f
+        val intersection = (a intersect b).size.toFloat()
+        val union = (a union b).size.toFloat()
+        return if (union == 0f) 0f else intersection / union
     }
 }

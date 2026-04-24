@@ -101,6 +101,10 @@ dependencies {
     // Coil — async image loading from file paths (thumbnails)
     implementation(libs.coil.compose)
 
+    // Reorderable — drag-to-reorder for the page reorder sheet
+    // (handles LazyColumn recycling, edge auto-scroll, smooth animations)
+    implementation(libs.reorderable)
+
     // Testing
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

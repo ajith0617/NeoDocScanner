@@ -18,6 +18,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -27,6 +28,7 @@ import com.example.neodocscanner.core.domain.model.Document
 import com.example.neodocscanner.core.domain.model.DocumentClass
 import com.example.neodocscanner.feature.vault.presentation.components.DocumentContextMenuState
 import com.example.neodocscanner.feature.vault.presentation.components.DocumentGalleryCard
+import com.example.neodocscanner.feature.vault.presentation.components.buildGroupedDocumentsByGroupId
 
 /**
  * Uncategorised tab — photo-style grid (column count from vault settings).
@@ -66,6 +68,9 @@ fun VaultReviewTab(
     }
 
     val cols = gridColumns.coerceIn(2, 3)
+    val groupedDocumentsByGroupId = remember(allDocumentsInScope) {
+        buildGroupedDocumentsByGroupId(allDocumentsInScope)
+    }
     val gridSpacing = when (cols) {
         3 -> 6.dp
         else -> 10.dp
@@ -88,32 +93,32 @@ fun VaultReviewTab(
     ) {
         items(documents, key = { it.id }) { document ->
             DocumentGalleryCard(
-                document                  = document,
-                allDocumentsInScope       = allDocumentsInScope,
-                gridColumns               = cols,
-                enableTypeSwitch          = false,
-                onTap                     = { onOpenDocument(document.id) },
-                onReclassify              = onReclassify,
-                contextMenuState          = contextMenuState,
-                onEnterSelectionMode      = onEnterSelectionMode,
-                onToggleSelection         = onToggleSelection,
-                onStartAadhaarPairing     = onStartAadhaarPairing,
-                onConfirmAadhaarPair      = onConfirmAadhaarPair,
-                onStartPassportPairing    = onStartPassportPairing,
-                onConfirmPassportPair     = onConfirmPassportPair,
-                onStartGenericGrouping    = onStartGenericGrouping,
-                onToggleGenericCandidate  = onToggleGenericCandidate,
-                onCancelGroupingModes     = onCancelGroupingModes,
-                onShowMoveSheet           = onShowMoveSheet,
-                onShowRenameGroupDialog   = onShowRenameGroupDialog,
-                onShowPageReorderSheet    = onShowPageReorderSheet,
-                onExportAsPdf             = onExportAsPdf,
-                onUngroupDocuments        = onUngroupDocuments,
-                onDeleteDocument          = onDeleteDocument,
-                onDeleteGroup             = onDeleteGroup,
-                onUnmergePdf              = onUnmergePdf,
-                onSharePdf                = onSharePdf,
-                onOpenPdfViewer           = onOpenPdfViewer
+                document = document,
+                groupDocumentsByGroupId = groupedDocumentsByGroupId,
+                gridColumns = cols,
+                enableTypeSwitch = false,
+                onTap = { onOpenDocument(document.id) },
+                onReclassify = onReclassify,
+                contextMenuState = contextMenuState,
+                onEnterSelectionMode = onEnterSelectionMode,
+                onToggleSelection = onToggleSelection,
+                onStartAadhaarPairing = onStartAadhaarPairing,
+                onConfirmAadhaarPair = onConfirmAadhaarPair,
+                onStartPassportPairing = onStartPassportPairing,
+                onConfirmPassportPair = onConfirmPassportPair,
+                onStartGenericGrouping = onStartGenericGrouping,
+                onToggleGenericCandidate = onToggleGenericCandidate,
+                onCancelGroupingModes = onCancelGroupingModes,
+                onShowMoveSheet = onShowMoveSheet,
+                onShowRenameGroupDialog = onShowRenameGroupDialog,
+                onShowPageReorderSheet = onShowPageReorderSheet,
+                onExportAsPdf = onExportAsPdf,
+                onUngroupDocuments = onUngroupDocuments,
+                onDeleteDocument = onDeleteDocument,
+                onDeleteGroup = onDeleteGroup,
+                onUnmergePdf = onUnmergePdf,
+                onSharePdf = onSharePdf,
+                onOpenPdfViewer = onOpenPdfViewer
             )
         }
     }

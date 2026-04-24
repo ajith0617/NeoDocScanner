@@ -8,10 +8,12 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.foundation.gestures.rememberTransformableState
-import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
@@ -31,7 +33,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -64,7 +66,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -75,27 +76,32 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.neodocscanner.core.domain.model.Document
 import com.example.neodocscanner.core.domain.model.TextRegion
 import com.example.neodocscanner.feature.vault.presentation.components.MoveToSectionSheet
 import com.example.neodocscanner.feature.vault.presentation.detail.DocumentDetailSheet
 import androidx.compose.ui.graphics.drawscope.Stroke
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
-import kotlin.math.abs
+import androidx.compose.ui.zIndex
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
+import kotlin.math.hypot
 
 /**
  * Full-screen document image viewer with:
- *  - Pinch-to-zoom (1x–4x) + double-tap reset
- *  - Multi-page horizontal swipe for grouped docs
+ *  - Pinch-to-zoom (1x–4x) + double-tap reset (manual two-finger pinch so
+ *    [HorizontalPager] is not blocked by transform detectors; one-finger pan only when zoomed)
+ *  - Multi-page horizontal swipe for grouped docs ([HorizontalPager])
  *  - OCR highlight overlay (toggle)
  *  - Tap on highlighted region → tooltip
  *  - Top bar: back, doc name, remove-from-group, move-to-category, info
@@ -281,6 +287,8 @@ private fun SinglePageViewer(
     viewModel: DocumentViewerViewModel
 ) {
     var tappedRegion by remember { mutableStateOf<TextRegion?>(null) }
+    var scale  by remember { mutableStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
     val regions = document.decodedRegions
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -288,6 +296,10 @@ private fun SinglePageViewer(
             ZoomableImage(
                 bitmap         = bitmap,
                 regions        = if (showHighlights) regions else emptyList(),
+                scale          = scale,
+                offset         = offset,
+                onScaleChange  = { scale = it },
+                onOffsetChange = { offset = it },
                 onRegionTapped = { region ->
                     tappedRegion = if (tappedRegion?.text == region?.text) null else region
                 }
@@ -317,6 +329,7 @@ private fun GroupedPageViewer(
     viewModel: DocumentViewerViewModel
 ) {
     var tappedRegion by remember { mutableStateOf<TextRegion?>(null) }
+    var isSyncingPagerFromState by remember { mutableStateOf(false) }
     val allPages = state.allPages
     val latestPageIndex by rememberUpdatedState(state.currentPageIndex)
     val pagerState = rememberPagerState(
@@ -324,42 +337,62 @@ private fun GroupedPageViewer(
         pageCount   = { allPages.size }
     )
 
-    // Sync pager ↔ ViewModel
-    LaunchedEffect(state.currentPageIndex) {
-        if (pagerState.currentPage != state.currentPageIndex) {
-            pagerState.scrollToPage(state.currentPageIndex)
-        }
-    }
+    // Per-page zoom state. Hoisting it here lets the pager disable horizontal
+    // scroll while a page is zoomed in (so pinch-pan wins over page-swipe),
+    // and lets us reset zoom whenever the page changes.
+    var scale  by remember { mutableStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    val isZoomed = scale > 1.02f
+
+    // Sync pager → ViewModel
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.currentPage }.collect { page ->
-            if (page != latestPageIndex) {
+            if (!isSyncingPagerFromState && page != latestPageIndex) {
                 viewModel.goToPage(page)
                 tappedRegion = null
+                scale  = 1f
+                offset = Offset.Zero
             }
+        }
+    }
+
+    // Sync ViewModel → pager (animated, so taps on the bottom strip glide
+    // through the same swipe animation users get from a finger swipe).
+    LaunchedEffect(state.currentPageIndex) {
+        if (pagerState.currentPage != state.currentPageIndex) {
+            isSyncingPagerFromState = true
+            try {
+                pagerState.animateScrollToPage(state.currentPageIndex)
+            } finally {
+                isSyncingPagerFromState = false
+            }
+            scale  = 1f
+            offset = Offset.Zero
         }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
         HorizontalPager(
-            state    = pagerState,
-            modifier = Modifier.fillMaxSize(),
-            userScrollEnabled = false
+            state                 = pagerState,
+            modifier              = Modifier.fillMaxSize(),
+            userScrollEnabled     = !isZoomed,
+            beyondViewportPageCount = 1,
+            key                   = { idx -> allPages[idx].id }
         ) { pageIdx ->
             val doc    = allPages.getOrNull(pageIdx)
             val bitmap = doc?.let { state.imageBitmaps[it.id] }
-            val regions = if (state.showHighlights && pageIdx == pagerState.currentPage)
+            val isCurrentPage = pageIdx == pagerState.currentPage
+            val regions = if (state.showHighlights && isCurrentPage)
                 doc?.decodedRegions ?: emptyList() else emptyList()
 
             if (bitmap != null) {
                 ZoomableImage(
                     bitmap         = bitmap,
                     regions        = regions,
-                    onSwipePrevious = {
-                        if (pageIdx > 0) viewModel.goToPage(pageIdx - 1)
-                    },
-                    onSwipeNext = {
-                        if (pageIdx < allPages.lastIndex) viewModel.goToPage(pageIdx + 1)
-                    },
+                    scale          = if (isCurrentPage) scale else 1f,
+                    offset         = if (isCurrentPage) offset else Offset.Zero,
+                    onScaleChange  = { if (isCurrentPage) scale = it },
+                    onOffsetChange = { if (isCurrentPage) offset = it },
                     onRegionTapped = { region ->
                         tappedRegion = if (tappedRegion?.text == region?.text) null else region
                     }
@@ -387,41 +420,111 @@ private fun GroupedPageViewer(
 
 // ── Zoomable image with OCR highlight overlay ─────────────────────────────────
 
+/** Span between the first two pressed pointers and their midpoint; null if fewer than two. */
+private fun spanAndCenterOfFirstTwoPressed(event: PointerEvent): Pair<Float, Offset>? {
+    val pressed = event.changes.filter { it.pressed }.sortedBy { it.id.value }
+    if (pressed.size < 2) return null
+    val p0 = pressed[0].position
+    val p1 = pressed[1].position
+    val span = hypot((p1.x - p0.x).toDouble(), (p1.y - p0.y).toDouble()).toFloat()
+    val center = Offset((p0.x + p1.x) / 2f, (p0.y + p1.y) / 2f)
+    return span to center
+}
+
 @Composable
 private fun ZoomableImage(
     bitmap: Bitmap,
     regions: List<TextRegion>,
-    onSwipePrevious: (() -> Unit)? = null,
-    onSwipeNext: (() -> Unit)? = null,
+    scale: Float,
+    offset: Offset,
+    onScaleChange: (Float) -> Unit,
+    onOffsetChange: (Offset) -> Unit,
     onRegionTapped: (TextRegion?) -> Unit
 ) {
-    var scale  by remember { mutableStateOf(1f) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
+    // Stable reads inside long-lived pointerInput coroutines (avoid stale closures).
+    val latestScale  by rememberUpdatedState(scale)
+    val latestOffset by rememberUpdatedState(offset)
+    val onScale      by rememberUpdatedState(onScaleChange)
+    val onOffset     by rememberUpdatedState(onOffsetChange)
 
-    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
-        val newScale = (scale * zoomChange).coerceIn(1f, 4f)
-        // Avoid pan-vs-swipe conflict at base zoom; allow pan only when zoomed in.
-        if (newScale > 1.02f || scale > 1.02f) {
-            offset += panChange
+    val zoomed = scale > 1.02f
+    // One-finger pan only while zoomed. At 1× zoom we attach no drag detector so
+    // HorizontalPager can own horizontal swipes.
+    val panWhenZoomed = if (zoomed) {
+        Modifier.pointerInput(Unit) {
+            detectDragGestures { change, dragAmount ->
+                change.consume()
+                onOffset(latestOffset + dragAmount)
+            }
         }
-        scale = newScale
-        if (scale <= 1.02f) offset = Offset.Zero
+    } else {
+        Modifier
+    }
+
+    // Pinch is implemented manually: only consume pointer deltas while ≥2 fingers.
+    // detectTransformGestures / transformable still compete with HorizontalPager for
+    // one-finger horizontal drags even when zoom == 1.
+    val pinchModifier = Modifier.pointerInput(Unit) {
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false)
+            var inPinch = false
+            var prevSpan = 0f
+            var prevCenter = Offset.Zero
+
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Main)
+                if (!event.changes.any { it.pressed }) break
+
+                val spanCenter = spanAndCenterOfFirstTwoPressed(event)
+                if (spanCenter != null) {
+                    val (span, center) = spanCenter
+                    if (!inPinch) {
+                        inPinch = true
+                        prevSpan = span
+                        prevCenter = center
+                        event.changes.forEach { if (it.pressed) it.consume() }
+                    } else {
+                        val zoomFactor = if (prevSpan > 0f) span / prevSpan else 1f
+                        val pan = center - prevCenter
+                        val s = latestScale
+                        val newScale = (s * zoomFactor).coerceIn(1f, 4f)
+                        onScale(newScale)
+                        if (newScale > 1.02f || s > 1.02f) {
+                            onOffset(latestOffset + pan)
+                        }
+                        if (newScale <= 1.02f) {
+                            onOffset(Offset.Zero)
+                        }
+                        prevSpan = span
+                        prevCenter = center
+                        event.changes.forEach { if (it.pressed) it.consume() }
+                    }
+                } else {
+                    if (inPinch) {
+                        inPinch = false
+                        prevSpan = 0f
+                    }
+                    // Single-finger segment: do not consume — HorizontalPager / tap.
+                }
+            }
+        }
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .transformable(state = transformState)
-            .pointerInput(Unit) {
+            // Tap / double-tap first (inner); pinch last (outer) so pinch sees events
+            // first and can abstain from consumption for one-finger drags.
+            .pointerInput(regions, bitmap.width, bitmap.height) {
                 detectTapGestures(
                     onDoubleTap = {
-                        scale = if (scale > 1.5f) 1f else 2.5f
-                        offset = Offset.Zero
+                        val target = if (latestScale > 1.5f) 1f else 2.5f
+                        onScale(target)
+                        onOffset(Offset.Zero)
                     },
                     onTap = { tapOffset ->
                         if (regions.isEmpty()) { onRegionTapped(null); return@detectTapGestures }
-                        // Hit-test against normalised regions (0–1) flipped per Vision coords
                         val vw = size.width.toFloat()
                         val vh = size.height.toFloat()
                         val imgAspect  = bitmap.width.toFloat() / bitmap.height.toFloat()
@@ -451,40 +554,9 @@ private fun ZoomableImage(
                     }
                 )
             }
-            .pointerInput(onSwipePrevious, onSwipeNext, scale) {
-                awaitPointerEventScope {
-                    while (true) {
-                        val down = awaitPointerEvent().changes.firstOrNull() ?: continue
-                        if (!down.pressed) continue
-
-                        var totalX = 0f
-                        var totalY = 0f
-                        var pointerActive = true
-
-                        while (pointerActive) {
-                            val event = awaitPointerEvent()
-                            val changes = event.changes
-                            if (changes.isEmpty()) break
-
-                            val activeChange = changes.first()
-                            if (!activeChange.pressed) {
-                                pointerActive = false
-                                break
-                            }
-
-                            val delta = activeChange.position - activeChange.previousPosition
-                            totalX += delta.x
-                            totalY += delta.y
-                        }
-
-                        if (scale <= 1.02f && abs(totalX) > 80f && abs(totalX) > abs(totalY) * 1.4f) {
-                            if (totalX > 0f) onSwipePrevious?.invoke() else onSwipeNext?.invoke()
-                        }
-                    }
-                }
-            }
+            .then(panWhenZoomed)
+            .then(pinchModifier)
     ) {
-        // Image layer
         Image(
             bitmap           = bitmap.asImageBitmap(),
             contentDescription = null,
@@ -499,7 +571,6 @@ private fun ZoomableImage(
                 )
         )
 
-        // OCR highlight overlay (Canvas drawing)
         if (regions.isNotEmpty()) {
             OcrHighlightOverlay(
                 bitmap  = bitmap,
@@ -686,137 +757,102 @@ private fun GroupReorderThumbnailStrip(
     onSelectPage: (String) -> Unit,
     onReorder: (List<String>) -> Unit
 ) {
-    val orderedDocs = remember(pages) { mutableStateListOf<Document>().apply { addAll(pages) } }
-    val previewDocs = remember { mutableStateListOf<Document>() }
-    var draggingDocId by remember { mutableStateOf<String?>(null) }
-    var draggingPreviewIndex by remember { mutableStateOf(-1) }
-    var dragOffsetX by remember { mutableStateOf(0f) }
-    var autoScrollJob by remember { mutableStateOf<Job?>(null) }
-    val itemWidthPx = with(LocalDensity.current) { 82.dp.toPx() }
-    val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
+    val latestOnReorder by rememberUpdatedState(onReorder)
+    val latestOnSelect  by rememberUpdatedState(onSelectPage)
 
-    // Keep local row order aligned when ViewModel state updates externally.
+    // Local mirror of the ordered pages. Mutated live during drag (so neighbours
+    // slide out of the way smoothly) and pushed back to the ViewModel once the
+    // finger lifts. We don't overwrite it from `pages` while a drag is in
+    // flight, otherwise the parent's stale order would fight the local one.
+    val orderedDocs = remember { mutableStateListOf<Document>() }
+    var isDraggingStrip by remember { mutableStateOf(false) }
+
     LaunchedEffect(pages) {
-        orderedDocs.clear()
-        orderedDocs.addAll(pages)
-        if (draggingDocId == null) {
-            previewDocs.clear()
-            previewDocs.addAll(pages)
+        if (!isDraggingStrip && orderedDocs.map { it.id } != pages.map { it.id }) {
+            orderedDocs.clear()
+            orderedDocs.addAll(pages)
         }
     }
 
-    val displayedDocs = if (draggingDocId != null) previewDocs else orderedDocs
+    val listState = rememberLazyListState()
+    val reorderableState = rememberReorderableLazyListState(listState) { from, to ->
+        // Calvin's library calls onMove per-crossing during drag.
+        orderedDocs.add(to.index, orderedDocs.removeAt(from.index))
+        haptic.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
+    }
+
+    // Auto-centre the active thumbnail when the page changes (from a pager
+    // swipe or from an external selection). Skipped while the user is dragging
+    // the strip so it doesn't yank under the finger.
+    LaunchedEffect(activeDocumentId, pages) {
+        if (isDraggingStrip || activeDocumentId == null) return@LaunchedEffect
+        val idx = pages.indexOfFirst { it.id == activeDocumentId }
+        if (idx < 0) return@LaunchedEffect
+        val viewportWidth = listState.layoutInfo.viewportSize.width
+        val itemInfo = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == idx }
+        val itemWidth = itemInfo?.size ?: 82 * 3 // sensible fallback before first layout
+        val centerOffset = -((viewportWidth - itemWidth) / 2)
+        listState.animateScrollToItem(idx, scrollOffset = centerOffset)
+    }
 
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = Color.Black.copy(alpha = 0.42f)
     ) {
         LazyRow(
-            state = listState,
-            modifier = Modifier
+            state                 = listState,
+            modifier              = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 10.dp),
-            contentPadding = PaddingValues(horizontal = 12.dp),
+            contentPadding        = PaddingValues(horizontal = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            itemsIndexed(displayedDocs, key = { _, doc -> doc.id }) { index, doc ->
-                val isActive = activeDocumentId == doc.id
-                val isDragging = doc.id == draggingDocId
-                val scale = if (isDragging) 1.08f else 1f
-                val thumbAlpha = if (isDragging) 0.94f else 1f
+            items(orderedDocs, key = { it.id }) { doc ->
+                ReorderableItem(reorderableState, key = doc.id) { isDragging ->
+                    val displayIndex = orderedDocs.indexOfFirst { it.id == doc.id } + 1
+                    val isActive = if (isDraggingStrip) isDragging else activeDocumentId == doc.id
 
-                Box(
-                    modifier = Modifier
-                        .size(width = 72.dp, height = 92.dp)
-                        .graphicsLayer {
-                            translationX = if (isDragging) dragOffsetX else 0f
-                            scaleX = scale
-                            scaleY = scale
-                            alpha = thumbAlpha
-                            shadowElevation = if (isDragging) 14f else 0f
-                        }
-                        .pointerInput(doc.id) {
-                            detectDragGesturesAfterLongPress(
-                                onDragStart = {
-                                    draggingDocId = doc.id
-                                    draggingPreviewIndex = index
-                                    dragOffsetX = 0f
-                                    previewDocs.clear()
-                                    previewDocs.addAll(orderedDocs)
+                    Box(
+                        modifier = Modifier
+                            .size(width = 72.dp, height = 92.dp)
+                            .zIndex(if (isDragging) 10f else 0f)
+                            .graphicsLayer {
+                                if (isDragging) {
+                                    scaleX = 1.06f
+                                    scaleY = 1.06f
+                                    alpha  = 0.95f
+                                    shadowElevation = 16f
+                                }
+                            }
+                            .longPressDraggableHandle(
+                                onDragStarted = {
+                                    isDraggingStrip = true
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 },
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    if (draggingDocId == null) return@detectDragGesturesAfterLongPress
-                                    dragOffsetX += dragAmount.x
-
-                                    val visible = listState.layoutInfo.visibleItemsInfo
-                                    val firstVisible = visible.firstOrNull()?.index ?: 0
-                                    val lastVisible = visible.lastOrNull()?.index ?: -1
-                                    val atStartEdge = draggingPreviewIndex <= firstVisible
-                                    val atEndEdge = draggingPreviewIndex >= lastVisible
-                                    when {
-                                        dragAmount.x < 0 && atStartEdge && firstVisible > 0 -> {
-                                            if (autoScrollJob?.isActive != true) {
-                                                autoScrollJob = scope.launch {
-                                                    listState.animateScrollToItem((firstVisible - 1).coerceAtLeast(0))
-                                                }
-                                            }
-                                        }
-                                        dragAmount.x > 0 && atEndEdge && lastVisible < previewDocs.lastIndex -> {
-                                            if (autoScrollJob?.isActive != true) {
-                                                autoScrollJob = scope.launch {
-                                                    listState.animateScrollToItem((lastVisible + 1).coerceAtMost(previewDocs.lastIndex))
-                                                }
-                                            }
-                                        }
-                                        else -> autoScrollJob?.cancel()
+                                onDragStopped = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.GestureEnd)
+                                    val finalOrder = orderedDocs.map { it.id }
+                                    isDraggingStrip = false
+                                    if (finalOrder != pages.map { it.id }) {
+                                        latestOnReorder(finalOrder)
                                     }
-
-                                    val from = draggingPreviewIndex
-                                    val step = (dragOffsetX / itemWidthPx).toInt()
-                                    if (step != 0 && from in previewDocs.indices) {
-                                        val to = (from + step).coerceIn(0, previewDocs.lastIndex)
-                                        if (to != from) {
-                                            val moved = previewDocs.removeAt(from)
-                                            previewDocs.add(to, moved)
-                                            draggingPreviewIndex = to
-                                            dragOffsetX -= (to - from) * itemWidthPx
-                                        }
-                                    }
-                                },
-                                onDragEnd = {
-                                    autoScrollJob?.cancel()
-                                    val oldIds = orderedDocs.map { it.id }
-                                    val newIds = previewDocs.map { it.id }
-                                    if (newIds != oldIds) {
-                                        orderedDocs.clear()
-                                        orderedDocs.addAll(previewDocs)
-                                        onReorder(newIds)
-                                    }
-                                    draggingDocId = null
-                                    draggingPreviewIndex = -1
-                                    dragOffsetX = 0f
-                                },
-                                onDragCancel = {
-                                    autoScrollJob?.cancel()
-                                    draggingDocId = null
-                                    draggingPreviewIndex = -1
-                                    dragOffsetX = 0f
                                 }
                             )
-                        }
-                        .pointerInput(doc.id) {
-                            detectTapGestures {
-                                onSelectPage(doc.id)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) {
+                                if (!isDraggingStrip) latestOnSelect(doc.id)
                             }
-                        }
-                ) {
-                    ViewerThumbnailItem(
-                        bitmap = thumbnails[doc.id],
-                        index = index + 1,
-                        isActive = isActive
-                    )
+                    ) {
+                        ViewerThumbnailItem(
+                            bitmap     = thumbnails[doc.id],
+                            index      = displayIndex,
+                            isActive   = isActive,
+                            isDragging = isDragging
+                        )
+                    }
                 }
             }
         }
@@ -827,12 +863,13 @@ private fun GroupReorderThumbnailStrip(
 private fun ViewerThumbnailItem(
     bitmap: Bitmap?,
     index: Int,
-    isActive: Boolean
+    isActive: Boolean,
+    isDragging: Boolean
 ) {
-    val borderColor = if (isActive) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        Color.White.copy(alpha = 0.36f)
+    val borderColor = when {
+        isDragging -> Color.White.copy(alpha = 0.92f)
+        isActive   -> MaterialTheme.colorScheme.primary
+        else       -> Color.White.copy(alpha = 0.36f)
     }
 
     Column(
@@ -844,7 +881,7 @@ private fun ViewerThumbnailItem(
                 .size(width = 66.dp, height = 74.dp)
                 .clip(RoundedCornerShape(10.dp))
                 .border(
-                    width = if (isActive) 2.dp else 1.dp,
+                    width = if (isActive || isDragging) 2.dp else 1.dp,
                     color = borderColor,
                     shape = RoundedCornerShape(10.dp)
                 )
@@ -853,37 +890,40 @@ private fun ViewerThumbnailItem(
         ) {
             if (bitmap != null) {
                 Image(
-                    bitmap = bitmap.asImageBitmap(),
+                    bitmap             = bitmap.asImageBitmap(),
                     contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
+                    contentScale       = ContentScale.Crop,
+                    modifier           = Modifier.fillMaxSize()
                 )
             } else {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
+                    modifier    = Modifier.size(18.dp),
                     strokeWidth = 2.dp,
-                    color = Color.White.copy(alpha = 0.9f)
+                    color       = Color.White.copy(alpha = 0.9f)
                 )
             }
 
             Surface(
-                shape = CircleShape,
-                color = if (isActive) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.65f),
+                shape    = CircleShape,
+                color    = if (isActive) MaterialTheme.colorScheme.primary
+                else Color.Black.copy(alpha = 0.65f),
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(4.dp)
             ) {
                 Text(
-                    text = "$index",
-                    style = MaterialTheme.typography.labelSmall,
+                    text       = "$index",
+                    style      = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color.White,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                    color      = Color.White,
+                    modifier   = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
                 )
             }
         }
     }
 }
+
+
 
 // ── OCR action button (bottom-right) ─────────────────────────────────────────
 

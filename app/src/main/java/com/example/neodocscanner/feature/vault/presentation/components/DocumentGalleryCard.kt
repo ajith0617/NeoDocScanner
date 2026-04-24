@@ -91,7 +91,7 @@ import java.util.Locale
 @Composable
 fun DocumentGalleryCard(
     document: Document,
-    allDocumentsInScope: List<Document> = emptyList(),
+    groupDocumentsByGroupId: Map<String, List<Document>> = emptyMap(),
     gridColumns: Int = 2,
     onTap: () -> Unit = {},
     // ── Classification reroute ────────────────────────────────────────────────
@@ -141,7 +141,9 @@ fun DocumentGalleryCard(
         compactGrid -> 8.sp
         else -> 9.sp
     }
-    val metadataText = document.cardMetaLabel(safeGridColumns)
+    val metadataText = remember(document.id, document.fileSize, document.dateAdded, safeGridColumns) {
+        document.cardMetaLabel(safeGridColumns)
+    }
     val overflowButtonSize = when {
         denseGrid -> 22.dp
         compactGrid -> 24.dp
@@ -158,6 +160,8 @@ fun DocumentGalleryCard(
     val badgeIndex     = contextMenuState.multiSelectBadgeIndex(document.id)
     val inMultiSelect  = contextMenuState.isInMultiSelect(document.id)
     val groupMemberCount = contextMenuState.groupMemberCountFor(document.id)
+    val duplicateClusterSize = contextMenuState.duplicateClusterSizeFor(document.id)
+    val isPossibleDuplicate = duplicateClusterSize >= 2
 
     val showHighlight = inMultiSelect
     val isInGroupingMode = contextMenuState.isAadhaarPairingMode
@@ -167,13 +171,7 @@ fun DocumentGalleryCard(
     val isMergedPdf  = document.exportedFromGroupId != null
     val isPaired     = document.aadhaarSide != null && document.groupId != null
     val isGroupStack = document.groupId != null && !isPaired && !isMergedPdf
-    val groupMembers = if (document.groupId != null) {
-        allDocumentsInScope
-            .filter { it.groupId == document.groupId }
-            .sortedWith(compareBy({ it.groupPageIndex ?: Int.MAX_VALUE }, { it.pageIndex ?: Int.MAX_VALUE }))
-    } else {
-        emptyList()
-    }
+    val groupMembers = document.groupId?.let(groupDocumentsByGroupId::get).orEmpty()
     val partnerDocument = if (isPaired) groupMembers.firstOrNull { it.id != document.id } else null
     val showsSideHintChip = document.groupId == null && (
         document.aadhaarSide != null ||
@@ -424,6 +422,25 @@ fun DocumentGalleryCard(
                         modifier           = Modifier.size(overflowIconSize)
                     )
                 }
+            }
+        }
+
+        if (isPossibleDuplicate && !contextMenuState.isSelectionMode) {
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = Color(0xCCB45309),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(top = topBadgePadding, start = topBadgePadding)
+            ) {
+                Text(
+                    text = if (compactGrid) "Dup" else "Possible duplicate",
+                    color = Color.White,
+                    fontSize = if (compactGrid) 8.sp else 9.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                    maxLines = 1
+                )
             }
         }
 
@@ -842,7 +859,9 @@ private fun ThumbnailImage(
     modifier: Modifier = Modifier
 ) {
     val path = doc.maskedRelativePath ?: doc.thumbnailRelativePath ?: doc.relativePath
-    val resolvedFile = resolveThumbnailFile(context, path)
+    val resolvedFile = remember(context.filesDir.absolutePath, path) {
+        resolveThumbnailFile(context, path)
+    }
 
     if (resolvedFile == null) {
         Box(
@@ -859,11 +878,15 @@ private fun ThumbnailImage(
         return
     }
 
-    AsyncImage(
-        model = ImageRequest.Builder(context)
+    val imageRequest = remember(context, resolvedFile.absolutePath) {
+        ImageRequest.Builder(context)
             .data(resolvedFile)
-            .crossfade(true)
-            .build(),
+            .crossfade(false)
+            .build()
+    }
+
+    AsyncImage(
+        model = imageRequest,
         contentDescription = doc.displayTitle,
         contentScale = ContentScale.Crop,
         modifier = modifier
@@ -1152,6 +1175,20 @@ fun ClassificationChangeSheetContent(
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+internal fun buildGroupedDocumentsByGroupId(documents: List<Document>): Map<String, List<Document>> =
+    documents
+        .asSequence()
+        .filter { it.groupId != null }
+        .groupBy { it.groupId!! }
+        .mapValues { (_, groupDocs) ->
+            groupDocs.sortedWith(
+                compareBy<Document>(
+                    { it.groupPageIndex ?: Int.MAX_VALUE },
+                    { it.pageIndex ?: Int.MAX_VALUE }
+                )
+            )
+        }
 
 /** Extension: label shown on the gallery card bottom strip */
 private val Document.cardLabel: String

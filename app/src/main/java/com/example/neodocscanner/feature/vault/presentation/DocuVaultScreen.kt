@@ -642,7 +642,7 @@ fun DocuVaultScreen(
             } else {
                 HorizontalPager(
                     state    = pagerState,
-                    beyondViewportPageCount = 1,
+                    beyondViewportPageCount = 0,
                     modifier = Modifier.fillMaxSize()
                 ) { page ->
                     when (page) {
@@ -876,7 +876,8 @@ private fun buildContextMenuState(uiState: VaultUiState): DocumentContextMenuSta
         passportPairingOrder    = uiState.passportPairingOrderedIds,
         isGenericGroupingMode   = uiState.isGenericGroupingMode,
         genericGroupingOrder    = uiState.genericGroupingOrderedIds,
-        groupMemberCounts       = docGroupCounts
+        groupMemberCounts       = docGroupCounts,
+        duplicateClusterSizes   = uiState.duplicateClusterSizes
     )
 }
 

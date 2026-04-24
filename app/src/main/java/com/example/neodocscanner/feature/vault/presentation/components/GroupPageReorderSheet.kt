@@ -1,19 +1,17 @@
 package com.example.neodocscanner.feature.vault.presentation.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,24 +24,23 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -52,6 +49,8 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.neodocscanner.core.domain.model.Document
 import com.example.neodocscanner.core.domain.model.ProcessingStatus
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 import java.io.File
 
 /**
@@ -59,8 +58,14 @@ import java.io.File
  *
  * iOS equivalent: GroupPageReorderSheet.swift
  *
- * Uses native Compose long-press drag gestures to reorder items —
- * no external library needed.
+ * Implementation notes:
+ *  - Uses sh.calvin.reorderable, the production-grade reorder library.
+ *    Hand-rolling `detectDragGesturesAfterLongPress` on a `LazyColumn` row
+ *    is fragile: any recomposition / row recycling mid-drag tears down
+ *    the modifier and silently cancels the gesture (the "auto drop" bug).
+ *  - Auto-scroll only kicks in when the finger nears the top/bottom edge
+ *    of the list (library default `scrollThreshold` ≈ 48.dp from each edge).
+ *  - The whole row is the long-press handle, matching the prior UX.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,11 +75,16 @@ fun GroupPageReorderSheet(
     onDone: (List<String>) -> Unit,
     onDismiss: () -> Unit
 ) {
-    var orderedDocs by remember(initialOrder) { mutableStateOf(initialOrder.toMutableList()) }
-    var draggingIndex by remember { mutableIntStateOf(-1) }
-    var dragOffsetY by remember { mutableFloatStateOf(0f) }
-    val itemHeightPx = 88.dp   // approximate row height (taller rows for visible thumbnails)
+    var orderedDocs by remember(initialOrder) { mutableStateOf(initialOrder) }
+    val haptics = LocalHapticFeedback.current
+
     val lazyListState = rememberLazyListState()
+    val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
+        orderedDocs = orderedDocs.toMutableList().apply {
+            add(to.index, removeAt(from.index))
+        }
+        haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -101,52 +111,44 @@ fun GroupPageReorderSheet(
                 }
             }
 
-            // ── Reorderable list (long-press drag) ────────────────────────────
+            // ── Reorderable list ──────────────────────────────────────────────
             LazyColumn(
-                state    = lazyListState,
-                modifier = Modifier.padding(bottom = 32.dp)
+                state          = lazyListState,
+                modifier       = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(bottom = 32.dp)
             ) {
-                itemsIndexed(orderedDocs, key = { _, doc -> doc.id }) { index, doc ->
-                    val isDragging = index == draggingIndex
-                    PageRow(
-                        doc        = doc,
-                        index      = index + 1,
-                        isDragging = isDragging,
-                        dragOffsetY = if (isDragging) dragOffsetY else 0f,
-                        modifier   = Modifier
-                            .fillMaxWidth()
-                            .pointerInput(index) {
-                                detectDragGesturesAfterLongPress(
-                                    onDragStart = { _ ->
-                                        draggingIndex = index
-                                        dragOffsetY = 0f
+                items(orderedDocs, key = { it.id }) { doc ->
+                    val displayIndex = orderedDocs.indexOf(doc) + 1
+
+                    ReorderableItem(reorderableState, key = doc.id) { isDragging ->
+                        Surface(
+                            shadowElevation = if (isDragging) 8.dp else 0.dp,
+                            color           = if (isDragging)
+                                MaterialTheme.colorScheme.surfaceVariant
+                            else
+                                Color.Transparent,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .longPressDraggableHandle(
+                                    onDragStarted = {
+                                        haptics.performHapticFeedback(
+                                            HapticFeedbackType.GestureThresholdActivate
+                                        )
                                     },
-                                    onDrag      = { change, dragAmount ->
-                                        change.consume()
-                                        dragOffsetY += dragAmount.y
-                                        // Compute target index from drag offset
-                                        val targetIndex = (index + (dragOffsetY / itemHeightPx.value).toInt())
-                                            .coerceIn(0, orderedDocs.size - 1)
-                                        if (targetIndex != draggingIndex) {
-                                            val mutable = orderedDocs.toMutableList()
-                                            val item = mutable.removeAt(draggingIndex)
-                                            mutable.add(targetIndex, item)
-                                            orderedDocs = mutable
-                                            dragOffsetY -= (targetIndex - draggingIndex) * itemHeightPx.value
-                                            draggingIndex = targetIndex
-                                        }
-                                    },
-                                    onDragEnd   = {
-                                        draggingIndex = -1
-                                        dragOffsetY = 0f
-                                    },
-                                    onDragCancel = {
-                                        draggingIndex = -1
-                                        dragOffsetY = 0f
+                                    onDragStopped = {
+                                        haptics.performHapticFeedback(
+                                            HapticFeedbackType.GestureEnd
+                                        )
                                     }
                                 )
-                            }
-                    )
+                        ) {
+                            PageRow(
+                                doc        = doc,
+                                index      = displayIndex,
+                                isDragging = isDragging
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -158,25 +160,14 @@ private fun PageRow(
     doc: Document,
     index: Int,
     isDragging: Boolean,
-    dragOffsetY: Float,
     modifier: Modifier = Modifier
 ) {
     Row(
         modifier = modifier
-            .offset(y = if (isDragging) dragOffsetY.dp else 0.dp)
-            .graphicsLayer {
-                scaleX = if (isDragging) 1.03f else 1f
-                scaleY = if (isDragging) 1.03f else 1f
-                shadowElevation = if (isDragging) 8f else 0f
-            }
-            .background(
-                if (isDragging) MaterialTheme.colorScheme.surfaceVariant
-                else Color.Transparent
-            )
+            .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Page number chip
         Box(
             modifier         = Modifier
                 .size(28.dp)
@@ -200,7 +191,6 @@ private fun PageRow(
         )
         Spacer(modifier = Modifier.width(12.dp))
 
-        // Name + side indicator
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text     = doc.fileName.substringBeforeLast("."),
@@ -224,11 +214,13 @@ private fun PageRow(
         }
         Spacer(modifier = Modifier.width(8.dp))
 
-        // Drag handle hint
         Icon(
             imageVector        = Icons.Default.DragHandle,
             contentDescription = "Long press to drag",
-            tint               = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint               = if (isDragging)
+                MaterialTheme.colorScheme.primary
+            else
+                MaterialTheme.colorScheme.onSurfaceVariant,
             modifier           = Modifier.size(20.dp)
         )
     }

@@ -200,10 +200,12 @@ fun DocumentListItem(
                     style    = MaterialTheme.typography.bodyMedium,
                     maxLines = 1
                 )
+                val duplicateClusterSize = contextMenuState.duplicateClusterSizeFor(document.id)
                 val subtitle = buildString {
                     append(document.formattedDate)
                     if (document.groupName != null) append(" · ${document.groupName}")
                     else append(" · ${document.formattedSize}")
+                    if (duplicateClusterSize >= 2) append(" · Possible duplicate")
                 }
                 Text(
                     text  = subtitle,
@@ -423,9 +425,12 @@ data class DocumentContextMenuState(
     val isGenericGroupingMode: Boolean   = false,
     val genericGroupingOrder: List<String> = emptyList(),
     // Maps doc.id → total group member count (including self)
-    val groupMemberCounts: Map<String, Int> = emptyMap()
+    val groupMemberCounts: Map<String, Int> = emptyMap(),
+    // Maps doc.id -> duplicate cluster size in the same category.
+    val duplicateClusterSizes: Map<String, Int> = emptyMap()
 ) {
     fun groupMemberCountFor(docId: String): Int = groupMemberCounts[docId] ?: 1
+    fun duplicateClusterSizeFor(docId: String): Int = duplicateClusterSizes[docId] ?: 0
 
     /** Same numbering rules as Select: order in list → 1-based badge; toggle removes and reindexes. */
     fun multiSelectBadgeIndex(docId: String): Int? {
