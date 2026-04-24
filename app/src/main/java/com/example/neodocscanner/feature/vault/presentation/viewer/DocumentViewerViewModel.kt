@@ -232,7 +232,6 @@ class DocumentViewerViewModel @Inject constructor(
                 )
             }
             persistedGroupOrderIds = withUpdatedIndexes.map { it.id }
-            _state.update { it.copy(alertMessage = "Reordered successfully") }
         }
     }
 
