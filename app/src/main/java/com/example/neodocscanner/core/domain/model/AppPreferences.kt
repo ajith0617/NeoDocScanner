@@ -7,6 +7,9 @@ package com.example.neodocscanner.core.domain.model
  * (backed by UserDefaults, replaced here by DataStore<Preferences>).
  */
 data class AppPreferences(
+    /** App-wide dark mode override (independent of system setting). */
+    val darkThemeEnabled: Boolean = false,
+
     /** When true, each scanned document is automatically renamed after ML + OCR complete. */
     val autoRenameEnabled: Boolean = false,
 

@@ -19,8 +19,9 @@ import javax.inject.Inject
  * ViewModel + DataStore so state is lifecycle-safe and testable.
  *
  * Settings:
- *  1. autoRenameEnabled     — default false
- *  2. keepOriginalAfterMask — default true
+ *  1. darkThemeEnabled      — default false
+ *  2. autoRenameEnabled     — default false
+ *  3. keepOriginalAfterMask — default true
  */
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
@@ -33,6 +34,13 @@ class SettingsViewModel @Inject constructor(
             started      = SharingStarted.WhileSubscribed(5_000),
             initialValue = AppPreferences()
         )
+
+    /** iOS equivalent: @AppStorage("darkThemeEnabled") toggle binding. */
+    fun toggleDarkTheme() {
+        viewModelScope.launch {
+            preferencesDataStore.setDarkThemeEnabled(!preferences.value.darkThemeEnabled)
+        }
+    }
 
     /** iOS: Toggle(isOn: $autoRenameEnabled) */
     fun toggleAutoRename() {

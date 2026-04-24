@@ -44,20 +44,15 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.TextFields
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -120,7 +115,6 @@ fun DocumentViewerScreen(
     val context = LocalContext.current
 
     val detailSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val removeSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val moveSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val document = state.document ?: return
@@ -160,7 +154,6 @@ fun DocumentViewerScreen(
                     state          = state,
                     onNavigateBack = onNavigateBack,
                     onShowInfo     = { viewModel.showDetailSheet() },
-                    onShowRemoveDialog = { viewModel.showRemoveFromGroupDialog() },
                     onShowMoveSheet    = { viewModel.showMoveSheet() }
                 )
             }
@@ -194,58 +187,6 @@ fun DocumentViewerScreen(
         }
     }
 
-    // ── Remove-from-group confirmation modal ─────────────────────────────────
-    if (state.showRemoveFromGroupDialog) {
-        ModalBottomSheet(
-            onDismissRequest = viewModel::dismissRemoveFromGroupDialog,
-            sheetState = removeSheetState
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    text = "Remove page from group?",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = "This removes only this page from the current group. The file itself will not be deleted.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Button(
-                    onClick = { viewModel.removeFromGroup(sendToUncategorised = true) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError
-                    )
-                ) {
-                    Text("Remove & move to Uncategorised")
-                }
-
-                OutlinedButton(
-                    onClick = { viewModel.removeFromGroup(sendToUncategorised = false) },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Remove & keep in current category")
-                }
-
-                TextButton(
-                    onClick = viewModel::dismissRemoveFromGroupDialog,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Cancel")
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-        }
-    }
-
     // ── Move-to-category sheet ───────────────────────────────────────────────
     if (state.showMoveSheet) {
         val moveDoc = state.activeDocument ?: state.document
@@ -253,6 +194,12 @@ fun DocumentViewerScreen(
             document = moveDoc,
             sectionsWithDocs = state.sectionsWithDocs,
             sheetState = moveSheetState,
+            title = if (state.isGrouped) "Ungroup and Move to Category" else "Move to Category",
+            uncategorisedSubtitle = if (state.isGrouped) {
+                "Ungroup this page and move to Uncategorised"
+            } else {
+                "Move to review inbox"
+            },
             onMove = viewModel::routeToSection,
             onDismiss = viewModel::dismissMoveSheet
         )
@@ -647,7 +594,6 @@ private fun ViewerTopBar(
     state: ViewerUiState,
     onNavigateBack: () -> Unit,
     onShowInfo: () -> Unit,
-    onShowRemoveDialog: () -> Unit,
     onShowMoveSheet: () -> Unit
 ) {
     val document  = state.document ?: return
@@ -715,17 +661,6 @@ private fun ViewerTopBar(
         }
 
         Spacer(Modifier.weight(1f))
-
-        // Remove from group (grouped docs only)
-        if (state.isGrouped) {
-            IconButton(onClick = onShowRemoveDialog) {
-                Icon(
-                    imageVector        = Icons.Default.LinkOff,
-                    contentDescription = "Remove from group",
-                    tint               = Color.White.copy(alpha = 0.85f)
-                )
-            }
-        }
 
         // Move to category (all viewer contexts)
         IconButton(onClick = onShowMoveSheet) {

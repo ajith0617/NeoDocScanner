@@ -7,11 +7,16 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.core.view.WindowCompat
+import com.example.neodocscanner.core.data.local.preferences.AppPreferencesDataStore
+import com.example.neodocscanner.core.domain.model.AppPreferences
 import com.example.neodocscanner.navigation.AppNavigation
 import com.example.neodocscanner.ui.theme.NeoDocScannerTheme
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 /**
  * Single-activity host. Delegates all navigation to [AppNavigation].
@@ -22,6 +27,8 @@ import dagger.hilt.android.AndroidEntryPoint
  */
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    @Inject
+    lateinit var appPreferencesDataStore: AppPreferencesDataStore
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -29,7 +36,10 @@ class MainActivity : ComponentActivity() {
         // and makes window.statusBarColor ignored. The coral color is applied by Theme.kt.
         WindowCompat.setDecorFitsSystemWindows(window, true)
         setContent {
-            NeoDocScannerTheme {
+            val appPreferences by appPreferencesDataStore.preferencesFlow
+                .collectAsState(initial = AppPreferences())
+
+            NeoDocScannerTheme(darkTheme = appPreferences.darkThemeEnabled) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color    = MaterialTheme.colorScheme.background

@@ -43,6 +43,8 @@ fun MoveToSectionSheet(
     document: Document?,
     sectionsWithDocs: List<SectionWithDocs>,
     sheetState: SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    title: String = "Move to Category",
+    uncategorisedSubtitle: String = "Move to review inbox",
     onMove: (sectionId: String?) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -59,7 +61,7 @@ fun MoveToSectionSheet(
                 .padding(bottom = 32.dp)
         ) {
             Text(
-                text       = "Move to Category",
+                text       = title,
                 style      = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 modifier   = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)
@@ -72,7 +74,7 @@ fun MoveToSectionSheet(
                 icon      = Icons.Default.Inbox,
                 iconTint  = MaterialTheme.colorScheme.secondary,
                 title     = "Uncategorised",
-                subtitle  = "Move to review inbox",
+                subtitle  = uncategorisedSubtitle,
                 isCurrent = document.sectionId == null,
                 onClick   = { onMove(null) }
             )

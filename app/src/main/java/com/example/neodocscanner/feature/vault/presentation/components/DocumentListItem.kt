@@ -205,7 +205,10 @@ fun DocumentListItem(
                     append(document.formattedDate)
                     if (document.groupName != null) append(" · ${document.groupName}")
                     else append(" · ${document.formattedSize}")
-                    if (duplicateClusterSize >= 2) append(" · Possible duplicate")
+                    if (duplicateClusterSize >= 2) {
+                        if (duplicateClusterSize >= 3) append(" · Dup ×$duplicateClusterSize")
+                        else append(" · Dup")
+                    }
                 }
                 Text(
                     text  = subtitle,
@@ -371,16 +374,6 @@ fun buildContextMenuItems(
         DropdownMenuItem(
             text    = { Text("Rename Group") },
             onClick = { onShowRenameGroup(document); onDismiss() }
-        )
-        if (groupMemberCount >= 2) {
-            DropdownMenuItem(
-                text    = { Text("Reorder Pages") },
-                onClick = { onReorderPages(document); onDismiss() }
-            )
-        }
-        DropdownMenuItem(
-            text    = { Text("Export as PDF") },
-            onClick = { onExportPdf(document.id); onDismiss() }
         )
         HorizontalDivider()
         DropdownMenuItem(

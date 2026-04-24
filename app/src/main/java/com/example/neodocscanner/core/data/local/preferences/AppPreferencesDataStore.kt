@@ -30,6 +30,7 @@ class AppPreferencesDataStore @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
     private object Keys {
+        val DARK_THEME_ENABLED      = booleanPreferencesKey("darkThemeEnabled")
         val AUTO_RENAME_ENABLED     = booleanPreferencesKey("autoRenameEnabled")
         val KEEP_ORIGINAL_AFTER_MASK = booleanPreferencesKey("keepOriginalAfterMask")
     }
@@ -37,9 +38,14 @@ class AppPreferencesDataStore @Inject constructor(
     /** Reactive stream of the current preferences snapshot. */
     val preferencesFlow: Flow<AppPreferences> = context.dataStore.data.map { prefs ->
         AppPreferences(
+            darkThemeEnabled       = prefs[Keys.DARK_THEME_ENABLED]       ?: false,
             autoRenameEnabled      = prefs[Keys.AUTO_RENAME_ENABLED]      ?: false,
             keepOriginalAfterMask  = prefs[Keys.KEEP_ORIGINAL_AFTER_MASK] ?: true
         )
+    }
+
+    suspend fun setDarkThemeEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.DARK_THEME_ENABLED] = enabled }
     }
 
     suspend fun setAutoRenameEnabled(enabled: Boolean) {

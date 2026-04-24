@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Card
@@ -44,9 +45,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  * iOS equivalent: SettingsView.swift — sheet presented from ApplicationHubView toolbar.
  *
  * Sections:
- *  1. Smart Naming  — autoRenameEnabled toggle + description
- *  2. Aadhaar Privacy — keepOriginalAfterMask toggle + description + warning
- *  3. About         — app name, version, build, platform
+ *  1. Appearance    — darkThemeEnabled toggle
+ *  2. Smart Naming  — autoRenameEnabled toggle + description
+ *  3. Aadhaar Privacy — keepOriginalAfterMask toggle + description + warning
+ *  4. Diagnostics   — extractor debug tooling
  *
  * UX adaptations:
  *  - TopAppBar with back navigation instead of iOS "Done" toolbar button
@@ -81,6 +83,23 @@ fun SettingsScreen(
                 .padding(padding)
                 .padding(horizontal = 16.dp),
             content        = {
+                // ── Appearance ─────────────────────────────────────────────────
+                item {
+                    SettingsSectionHeader(
+                        title = "Appearance",
+                        icon  = Icons.Default.DarkMode
+                    )
+                    SettingsCard {
+                        ToggleRow(
+                            label       = "Dark theme",
+                            description = "Use a softer dark palette designed for night viewing and reduced eye strain.",
+                            checked     = prefs.darkThemeEnabled,
+                            onToggle    = viewModel::toggleDarkTheme
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(20.dp))
+                }
+
                 // ── Smart Naming ───────────────────────────────────────────────
                 item {
                     SettingsSectionHeader(

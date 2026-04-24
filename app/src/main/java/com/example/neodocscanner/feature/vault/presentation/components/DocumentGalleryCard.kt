@@ -203,6 +203,7 @@ fun DocumentGalleryCard(
     } else {
         if (compactGrid) 5.dp else 7.dp
     }
+    val duplicateChipText = if (duplicateClusterSize >= 3) "Dup ×$duplicateClusterSize" else "Dup"
 
     // ── Classification picker sheet ───────────────────────────────────────────
     if (enableTypeSwitch && showClassPicker) {
@@ -365,10 +366,14 @@ fun DocumentGalleryCard(
             if (!contextMenuState.isSelectionMode && (showsSideHintChip || passportMissingSideLabel != null)) {
                 val statusLabel = when {
                     showsSideHintChip && document.aadhaarSide != null ->
-                        if (document.aadhaarSide == "front") "Front only" else "Back only"
+                        if (document.aadhaarSide == "front") "Front" else "Back"
                     showsSideHintChip && document.documentClass == DocumentClass.PASSPORT ->
-                        if (document.passportSide == "data") "Data only" else "Back only"
-                    else -> passportMissingSideLabel.orEmpty()
+                        if (document.passportSide == "data") "Data" else "Back"
+                    else -> when (passportMissingSideLabel) {
+                        "Need back page" -> "Need back"
+                        "Need data page" -> "Need data"
+                        else -> passportMissingSideLabel.orEmpty()
+                    }
                 }
                 val statusBackground = when {
                     passportMissingSideLabel != null -> Color(0xAA7C3AED)
@@ -434,11 +439,11 @@ fun DocumentGalleryCard(
                     .padding(top = topBadgePadding, start = topBadgePadding)
             ) {
                 Text(
-                    text = if (compactGrid) "Dup" else "Possible duplicate",
+                    text = duplicateChipText,
                     color = Color.White,
                     fontSize = if (compactGrid) 8.sp else 9.sp,
                     fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                    modifier = Modifier.padding(horizontal = if (compactGrid) 5.dp else 6.dp, vertical = 2.dp),
                     maxLines = 1
                 )
             }
@@ -576,10 +581,6 @@ private fun DocumentActionSheetContent(
         if (document.groupId != null) {
             HorizontalDivider()
             ActionSheetButton("Rename Group") { onShowRenameGroup(document); onDismiss() }
-            if (groupMemberCount >= 2) {
-                ActionSheetButton("Reorder Pages") { onReorderPages(document); onDismiss() }
-            }
-            ActionSheetButton("Export as PDF") { onExportPdf(document.id); onDismiss() }
             HorizontalDivider()
             ActionSheetButton("Ungroup") { onUngroup(document.id); onDismiss() }
         }

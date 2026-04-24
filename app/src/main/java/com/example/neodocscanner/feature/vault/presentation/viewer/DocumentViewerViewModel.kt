@@ -52,8 +52,6 @@ data class ViewerUiState(
     // Move-to-category sheet
     val showMoveSheet: Boolean = false,
     val sectionsWithDocs: List<SectionWithDocs> = emptyList(),
-    // Remove-from-group dialog
-    val showRemoveFromGroupDialog: Boolean = false,
     // One-shot viewer alert message
     val alertMessage: String? = null
 ) {
@@ -306,32 +304,116 @@ class DocumentViewerViewModel @Inject constructor(
     fun routeToSection(sectionId: String?) {
         viewModelScope.launch {
             val current = _state.value
-            val activeDoc = current.activeDocument ?: current.document ?: return@launch
-            val toMove = if (current.isGrouped) current.allPages else listOf(activeDoc)
-            val instanceId = activeDoc.applicationInstanceId
+            val initialActiveDoc = current.activeDocument ?: current.document ?: return@launch
+            val instanceId = initialActiveDoc.applicationInstanceId
             val sections = instanceId?.let { sectionRepository.getByInstanceOnce(it) }.orEmpty()
-            for (doc in toMove) {
-                if (sections.isNotEmpty()) {
-                    documentRepository.syncDocumentClassForSectionMove(doc, sectionId, sections)
-                }
-                reExtractFieldsForCurrentClass(doc.id)
-                documentRepository.updateSectionId(doc.id, sectionId)
-                rerunMaskingAfterMove(doc.id)
-                tryAutoPairAadhaarAfterMove(doc.id, doc.applicationInstanceId ?: instanceId)
-                tryAutoPairPassportAfterMove(doc.id, doc.applicationInstanceId ?: instanceId)
-            }
-            val updatedPages = toMove.mapNotNull { moved -> documentRepository.getById(moved.id) }
-            _state.update { prev ->
-                val updatedById = updatedPages.associateBy { it.id }
-                val updatedRoot = prev.document?.let { updatedById[it.id] ?: it }
-                val updatedGroup = prev.groupPages.map { updatedById[it.id] ?: it }
-                prev.copy(
-                    document = updatedRoot,
-                    groupPages = updatedGroup,
-                    showMoveSheet = false
+            val wasGrouped = current.isGrouped && initialActiveDoc.groupId != null
+            val oldGroupId = initialActiveDoc.groupId
+            val oldOrderedPages = current.allPages
+            val oldIndex = current.currentPageIndex.coerceIn(0, oldOrderedPages.lastIndex.coerceAtLeast(0))
+
+            // Viewer rule: move only the currently active page.
+            // If it's currently grouped, ungroup this page first.
+            if (wasGrouped) {
+                val allGroupMembers = current.allPages
+                documentRepository.updateGrouping(
+                    id             = initialActiveDoc.id,
+                    groupId        = null,
+                    groupName      = null,
+                    groupPageIndex = null,
+                    aadhaarSide    = null,
+                    passportSide   = null
                 )
+
+                // If only one member remains after removing this page, dissolve the group.
+                val remaining = allGroupMembers.filter { it.id != initialActiveDoc.id }
+                if (remaining.size == 1) {
+                    val last = remaining.first()
+                    documentRepository.updateGrouping(
+                        id             = last.id,
+                        groupId        = null,
+                        groupName      = null,
+                        groupPageIndex = null,
+                        aadhaarSide    = null,
+                        passportSide   = null
+                    )
+                }
             }
+
+            // Re-read after ungrouping, otherwise classification sync may accidentally
+            // write stale groupId/group fields back to this document.
+            val activeDoc = documentRepository.getById(initialActiveDoc.id) ?: initialActiveDoc
+
+            if (sections.isNotEmpty()) {
+                documentRepository.syncDocumentClassForSectionMove(activeDoc, sectionId, sections)
+            }
+            reExtractFieldsForCurrentClass(activeDoc.id)
+            documentRepository.updateSectionId(activeDoc.id, sectionId)
+            rerunMaskingAfterMove(activeDoc.id)
+            // Do not auto-pair after explicit viewer move/ungroup action.
+            // User intent here is to keep this page standalone.
+
+            val updatedActive = documentRepository.getById(activeDoc.id) ?: activeDoc
+            val targetSectionName = sectionId?.let { sid ->
+                sections.firstOrNull { it.id == sid }?.title
+            } ?: "Uncategorised"
+
+            if (wasGrouped && oldGroupId != null) {
+                // Keep user in viewer with neighboring page after moving current one out.
+                val remainingOrdered = oldOrderedPages.filter { it.id != initialActiveDoc.id }
+                val focusedIndex = oldIndex.coerceAtMost(remainingOrdered.lastIndex.coerceAtLeast(0))
+                val focusedId = remainingOrdered.getOrNull(focusedIndex)?.id
+
+                val refreshedRemaining = remainingOrdered.mapNotNull { doc ->
+                    documentRepository.getById(doc.id)
+                }
+                val refreshedById = refreshedRemaining.associateBy { it.id }
+                val focusedDoc = focusedId?.let { refreshedById[it] } ?: refreshedRemaining.firstOrNull()
+
+                if (focusedDoc != null) {
+                    // If group dissolved to one page, show single-page viewer.
+                    val stillGrouped = focusedDoc.groupId != null &&
+                        refreshedRemaining.count { it.groupId == focusedDoc.groupId } > 1
+                    val focusedGroupPages = if (stillGrouped) {
+                        refreshedRemaining.filter { it.id != focusedDoc.id && it.groupId == focusedDoc.groupId }
+                    } else {
+                        emptyList()
+                    }
+                    val feedback = "Moved to $targetSectionName and removed from group"
+                    _state.update {
+                        it.copy(
+                            document = focusedDoc,
+                            groupPages = focusedGroupPages,
+                            currentPageIndex = 0,
+                            showMoveSheet = false,
+                            alertMessage = feedback
+                        )
+                    }
+                } else {
+                    _state.update {
+                        it.copy(
+                            document = updatedActive,
+                            groupPages = emptyList(),
+                            currentPageIndex = 0,
+                            showMoveSheet = false,
+                            alertMessage = "Moved to $targetSectionName"
+                        )
+                    }
+                }
+            } else {
+                _state.update {
+                    it.copy(
+                        document = updatedActive,
+                        groupPages = emptyList(),
+                        currentPageIndex = 0,
+                        showMoveSheet = false,
+                        alertMessage = "Moved to $targetSectionName"
+                    )
+                }
+            }
+
             refreshSectionsWithDocs(instanceId)
+            loadImages()
         }
     }
 
@@ -369,46 +451,6 @@ class DocumentViewerViewModel @Inject constructor(
             )
         }
         _state.update { it.copy(sectionsWithDocs = mapped) }
-    }
-
-    // ── Remove from group ─────────────────────────────────────────────────────
-
-    fun showRemoveFromGroupDialog()    { _state.update { it.copy(showRemoveFromGroupDialog = true) } }
-    fun dismissRemoveFromGroupDialog() { _state.update { it.copy(showRemoveFromGroupDialog = false) } }
-
-    fun removeFromGroup(sendToUncategorised: Boolean) {
-        val doc = _state.value.activeDocument ?: return
-        viewModelScope.launch {
-            val newSectionId = if (sendToUncategorised) null else doc.sectionId
-            val allGroupMembers = (_state.value.allPages)
-
-            // Remove group from this doc
-            documentRepository.updateGrouping(
-                id             = doc.id,
-                groupId        = null,
-                groupName      = null,
-                groupPageIndex = null,
-                aadhaarSide    = null,
-                passportSide   = null
-            )
-            documentRepository.updateSectionId(doc.id, newSectionId)
-
-            // If only one member remains dissolve the group entirely
-            val remaining = allGroupMembers.filter { it.id != doc.id }
-            if (remaining.size == 1) {
-                val last = remaining.first()
-                documentRepository.updateGrouping(
-                    id             = last.id,
-                    groupId        = null,
-                    groupName      = null,
-                    groupPageIndex = null,
-                    aadhaarSide    = null,
-                    passportSide   = null
-                )
-            }
-
-            _state.update { it.copy(showRemoveFromGroupDialog = false) }
-        }
     }
 
     // ── Detail sheet ──────────────────────────────────────────────────────────

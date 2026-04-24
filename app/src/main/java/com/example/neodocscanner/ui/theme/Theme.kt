@@ -17,49 +17,54 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
-private val DarkSurface = Color(0xFF232326)
-private val DarkSurfaceVariant = Color(0xFF2F2F33)
-private val DarkSecondaryContainer = Color(0xFF2B2624)
-private val DarkSurfaceHighest = Color(0xFF38383C)
+private val DarkBackground = Color(0xFF14171B)
+private val DarkSurface = Color(0xFF1C2025)
+private val DarkSurfaceVariant = Color(0xFF2A2F36)
+private val DarkSecondaryContainer = Color(0xFF2A2628)
+private val DarkSurfaceHighest = Color(0xFF343A42)
+private val DarkOnBackground = Color(0xFFE7EAF0)
+private val DarkOnSurface = Color(0xFFE6E9EE)
+private val DarkOnSurfaceVariant = Color(0xFFB7BEC9)
+private val DarkOutline = Color(0xFF515A66)
 
 // The supplied design tokens are light-first. These darker neutrals keep dark mode
 // usable until a dedicated dark palette is provided.
 private val DarkColorScheme = darkColorScheme(
     primary = Coral,
-    onPrimary = BgCard,
-    primaryContainer = CoralDark,
-    onPrimaryContainer = BgCard,
+    onPrimary = Color(0xFF171A1E),
+    primaryContainer = Color(0xFF5A3932),
+    onPrimaryContainer = Color(0xFFFFD8CF),
     secondary = CoralDark,
-    onSecondary = BgCard,
+    onSecondary = Color(0xFF161A1E),
     secondaryContainer = DarkSecondaryContainer,
-    onSecondaryContainer = BgBase,
+    onSecondaryContainer = Color(0xFFEBDADC),
     tertiary = GreenAccent,
-    onTertiary = BgCard,
-    tertiaryContainer = GreenAccent.copy(alpha = 0.24f),
-    onTertiaryContainer = BgBase,
-    background = Ink,
-    onBackground = BgBase,
+    onTertiary = Color(0xFF141A14),
+    tertiaryContainer = Color(0xFF24412E),
+    onTertiaryContainer = Color(0xFFD7F3DE),
+    background = DarkBackground,
+    onBackground = DarkOnBackground,
     surface = DarkSurface,
-    surfaceDim = Ink,
+    surfaceDim = DarkBackground,
     surfaceBright = DarkSurface,
-    surfaceContainerLowest = Ink,
+    surfaceContainerLowest = DarkBackground,
     surfaceContainerLow = DarkSurface,
     surfaceContainer = DarkSurface,
     surfaceContainerHigh = DarkSurfaceVariant,
     surfaceContainerHighest = DarkSurfaceHighest,
-    onSurface = BgBase,
+    onSurface = DarkOnSurface,
     surfaceVariant = DarkSurfaceVariant,
-    onSurfaceVariant = InkDim,
+    onSurfaceVariant = DarkOnSurfaceVariant,
     surfaceTint = Coral,
-    inverseSurface = BgBase,
-    inverseOnSurface = Ink,
+    inverseSurface = DarkOnBackground,
+    inverseOnSurface = DarkBackground,
     inversePrimary = CoralDark,
     error = DangerRed,
-    onError = BgCard,
-    errorContainer = DangerRed.copy(alpha = 0.24f),
-    onErrorContainer = BgBase,
-    outline = StrokeMid,
-    outlineVariant = StrokeMid.copy(alpha = 0.55f),
+    onError = Color(0xFF1F1A1A),
+    errorContainer = Color(0xFF5D2A2A),
+    onErrorContainer = Color(0xFFFFDAD6),
+    outline = DarkOutline,
+    outlineVariant = DarkOutline.copy(alpha = 0.72f),
     scrim = Color.Black.copy(alpha = 0.48f)
 )
 
@@ -124,9 +129,12 @@ fun NeoDocScannerTheme(
         SideEffect {
             val activity = context.findActivity()
             val window = activity?.window ?: return@SideEffect
-            // Keep status bar color stable after returning from ML Kit scanner.
-            // Explicitly pin to Coral token for consistent brand color.
-            window.statusBarColor = Coral.toArgb()
+            // In dark mode keep status bar aligned with dark surface to reduce glare.
+            window.statusBarColor = if (darkTheme) {
+                colorScheme.surface.toArgb()
+            } else {
+                Coral.toArgb()
+            }
             WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
         }
     }
