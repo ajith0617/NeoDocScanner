@@ -841,64 +841,130 @@ class DocumentFieldExtractorService @Inject constructor() {
             addField("Date of Expiry", mrz.dateOfExpiry)
             addField("Sex", mrz.sex)
         } else {
-            addField("Passport Number", detectPassportNumber(normaliseDigits(frontText)))
+            val frontLayout = inferPassportFrontLayout(frontText)
+            val partialMrz = parsePassportMrzLine2(frontText) ?: parsePassportMrzLine2(combined)
+            val topNameBlock = detectPassportTopNameBlock(frontText)
+            val rawSurnameCandidate = detectPassportNameAfterLabel(
+                frontText,
+                "sur[nm]ame|sumname|surnarne|surnam[eo0]"
+            ) ?: detectPassportUppercaseLabeledValue(frontText, "sur[nm]ame|sumname|surnarne|surnam[eo0]")
+            val rawGivenCandidate = detectPassportNameAfterLabel(
+                frontText,
+                // "Given amee" / "Given ame" — common OCR when "name" reads as "amee"
+                "g(?:[i1l])?v(?:e|a)?n\\s*(?:name|names|nameo|neme|narnes?|anemis|am+e{1,3}|n?amee)(?:\\s*\\(s\\)|s|ls?|[o0])?"
+            ) ?: detectPassportGivenName(frontText) ?: frontLayout.givenName
+            val partialName = parsePassportMrzNameLine(frontText, rawSurnameCandidate, rawGivenCandidate)
+                ?: parsePassportMrzNameLine(combined, rawSurnameCandidate, rawGivenCandidate)
+            val frontPassportNumber = normalizePassportNumberCandidate(
+                detectPassportNumber(normaliseDigits(frontText))
+            )
+            addField(
+                "Passport Number",
+                confirmPassportNumberWithReference(frontPassportNumber, partialMrz?.passportNumber)
+            )
             val surname = sanitizePassportFieldValue(
                 "Surname",
-                detectPassportLabeledValue(frontText, "sur[nm]ame|sumname|surnarne")
+                topNameBlock?.first ?: rawSurnameCandidate ?: partialName?.surname
             )
             val givenName = sanitizePassportFieldValue(
                 "Given Name",
-                detectPassportLabeledValue(frontText, "g[i1l]ven\\s*name(?:\\s*\\(s\\)|s|ls?|[o0])?")
+                topNameBlock?.second ?: rawGivenCandidate ?: partialName?.givenName
             )
             val heuristicName = if (!frontLooksLikeBackPage) detectPassportHeuristicName(frontText) else null
             val name = when {
                 surname != null && givenName != null -> "$givenName $surname"
                 givenName != null -> givenName
+                frontLayout.givenName != null && !samePassportNamePart(frontLayout.givenName, surname) -> frontLayout.givenName
                 heuristicName != null && !samePassportNamePart(heuristicName, surname) -> heuristicName
                 else -> null
             }
             addField("Name", name)
             addField("Surname", surname)
             addField("Given Name", givenName)
-            addField("Nationality", detectPassportLabeledValue(frontText, "nationalit"))
-            addField("Sex", detectLabeledValue("sex|gender", frontText))
-            addField("Date of Birth", detectLabeledDate("date\\s+of\\s+birth|dob", frontText))
-            addField("Place of Birth", detectPassportLabeledValue(frontText, "place\\s+of\\s+birth"))
-            addField("Place of Issue", detectPassportLabeledValue(frontText, "place\\s+of\\s+(i[sl]su[ae]?|issue|lssua|lusua)"))
-            addField("Date of Issue", detectLabeledDate("date\\s+of\\s+issue|issue\\s+date", frontText))
-            addField("Date of Expiry", detectLabeledDate("date\\s+of\\s+expir[yi]|date\\s+at\\s+expir|expiry", frontText))
+            addField("Nationality", detectPassportUppercaseLabeledValue(frontText, "nationalit") ?: partialMrz?.countryCode)
+            addField("Sex", detectLabeledValue("sex|gender", frontText) ?: partialMrz?.sex)
+            addField("Date of Birth", detectLabeledDate("date\\s+of\\s+birth|dob", frontText) ?: partialMrz?.dateOfBirth ?: frontLayout.dateOfBirth)
+            addField("Place of Birth", detectPassportFrontPlace(frontText, "place\\s+of\\s+birth") ?: frontLayout.placeOfBirth)
+            addField("Place of Issue", detectPassportFrontPlace(frontText, "place\\s+of\\s+(i[sl]su[ae]?|issue|lssua|lusua)") ?: frontLayout.placeOfIssue)
+            addField(
+                "Date of Issue",
+                detectLabeledDate("date\\s+of\\s+issue|issue\\s+date", frontText)
+                    ?: inferPassportIssueDate(frontText, partialMrz?.dateOfBirth, partialMrz?.dateOfExpiry)
+                    ?: frontLayout.dateOfIssue
+            )
+            addField("Date of Expiry", detectLabeledDate("date\\s+of\\s+expir[yi]|date\\s+at\\s+expir|expiry", frontText) ?: partialMrz?.dateOfExpiry ?: frontLayout.dateOfExpiry)
+            if (!seenLabels.contains("Passport Number")) {
+                addField("Passport Number", frontPassportNumber)
+            }
         }
 
         // Ensure front list still has expiry/issue/nationality even when MRZ path was used.
-        addField("Nationality", detectPassportLabeledValue(frontText, "nationalit"))
-        addField("Place of Birth", detectPassportLabeledValue(frontText, "place\\s+of\\s+birth"))
-        addField("Place of Issue", detectPassportLabeledValue(frontText, "place\\s+of\\s+(i[sl]su[ae]?|issue|lssua|lusua)"))
+        addField("Nationality", detectPassportUppercaseLabeledValue(frontText, "nationalit"))
+        addField("Place of Birth", detectPassportFrontPlace(frontText, "place\\s+of\\s+birth"))
+        addField("Place of Issue", detectPassportFrontPlace(frontText, "place\\s+of\\s+(i[sl]su[ae]?|issue|lssua|lusua)"))
         addField("Date of Issue", detectLabeledDate("date\\s+of\\s+issue|issue\\s+date", frontText))
         if (!seenLabels.contains("Date of Expiry")) {
             addField("Date of Expiry", detectLabeledDate("date\\s+of\\s+expir[yi]|date\\s+at\\s+expir|expiry", frontText))
         }
+        val inferredFrontDates = inferPassportFrontDates(frontText)
+        if (!seenLabels.contains("Date of Birth")) addField("Date of Birth", inferredFrontDates.first)
+        if (!seenLabels.contains("Date of Issue")) addField("Date of Issue", inferredFrontDates.second)
+        if (!seenLabels.contains("Date of Expiry")) addField("Date of Expiry", inferredFrontDates.third)
+        if (!seenLabels.contains("Nationality") && Regex("""(?i)\bind\b""").containsMatchIn(frontText)) {
+            addField("Nationality", "INDIAN")
+        }
+        val inferredFrontNames = inferPassportFrontNames(frontText)
+        if (!seenLabels.contains("Surname")) addField("Surname", inferredFrontNames.first)
+        if (!seenLabels.contains("Given Name")) addField("Given Name", inferredFrontNames.second)
+        if (!seenLabels.contains("Name")) {
+            val s = inferredFrontNames.first
+            val g = inferredFrontNames.second
+            if (!s.isNullOrBlank() && !g.isNullOrBlank()) addField("Name", "$g $s")
+        }
 
         // ── Back page fields ───────────────────────────────────────────────────
-        val backScope = if (backOnlyText.isNotBlank()) backOnlyText else combined
-        addField(
-            "Name of Father/Legal Guardian",
-            detectPassportLabeledValue(
-                backScope,
-                "name\\s+of\\s+fat(?:h|b)er(?:\\s*/\\s*legal\\s+guardian)?|father(?:\\s*/\\s*legal\\s+guardian)?|legal\\s+guardian"
+        val backScope = backOnlyText.trim()
+        if (backScope.isNotBlank()) {
+            addField(
+                "Name of Father/Legal Guardian",
+                detectPassportBackRelative(
+                    backScope,
+                    """name\s+of\s+fat(?:h|b)er(?:\s*/\s*legal\s+guardian)?|father(?:\s*/\s*legal\s+guardian)?|legal\s+guardian"""
+                )
             )
-        )
-        addField("Name of Mother", detectPassportLabeledValue(backScope, "name\\s+of\\s+mother|mother"))
-        addField("Address", detectPassportBackAddress(backScope))
+            addField("Name of Mother", detectPassportBackRelative(backScope, """name\s+of\s+mother|mother"""))
+            addField("Name of Spouse", detectPassportBackRelative(backScope, """name\s+of\s+spouse|spouse"""))
+            val inferredBack = inferPassportBackRelatives(backScope)
+            if (!seenLabels.contains("Name of Father/Legal Guardian")) addField("Name of Father/Legal Guardian", inferredBack.first)
+            if (!seenLabels.contains("Name of Mother")) addField("Name of Mother", inferredBack.second)
+            if (!seenLabels.contains("Name of Spouse")) addField("Name of Spouse", inferredBack.third)
+            addField("Address", detectPassportBackAddress(backScope))
+        }
 
         // Back passport number is often printed near barcode block.
         val backPassport = detectPassportNumberNearBarcode(backScope)
             ?: detectPassportNumber(normaliseDigits(backScope))
             ?: detectPassportNumber(normaliseDigits(combined))
         if (!seenLabels.contains("Passport Number")) {
-            addField("Passport Number", backPassport)
+            addField(
+                "Passport Number",
+                confirmPassportNumberWithReference(
+                    normalizePassportNumberCandidate(backPassport),
+                    partialMrzPassportReference(combined)
+                )
+            )
         }
 
-        return normalizePassportNameFields(fields)
+        return normalizePassportDateFields(
+            normalizePassportPlaceFields(
+                resolvePassportNameFieldConflicts(
+                    normalizePassportNameFields(fields),
+                    frontText,
+                    combined
+                ),
+                frontText
+            )
+        )
     }
 
     private fun detectPassportNumberNearBarcode(text: String): String? {
@@ -1002,7 +1068,10 @@ class DocumentFieldExtractorService @Inject constructor() {
                 else clean
             }
             "Date of Birth", "Date of Issue", "Date of Expiry" -> {
-                detectFirstDate(value)
+                detectFirstDate(value) ?: normalizeReadableDate(value)
+            }
+            "Nationality" -> {
+                normalizePassportNationality(value)
             }
             "Name of Father/Legal Guardian" -> {
                 if (looksLikePassportRelativeLabelEcho(value)) null else value
@@ -1018,9 +1087,12 @@ class DocumentFieldExtractorService @Inject constructor() {
                 if (norm.contains("name of spouse") || norm == "address") null else value
             }
             "Name", "Surname", "Given Name" -> {
+                if (looksLikePassportCountryBanner(value)) return null
                 if (value.contains("/") || value.contains("\\")) return null
                 if (Regex("""(?i)^[a-z]\s*/\s*[a-z].*""").containsMatchIn(value)) return null
                 val keywordLike = passportKeywords.any { k -> normalized == k || normalized.contains(k) }
+                val labelNoiseLike = Regex("""\bnati\w{2,8}\b|\bcoun\w{2,6}\s+code\b|\bgiven\s*name\b|\bsur\w{2,8}\b""")
+                    .containsMatchIn(normalized)
                 val hasCountryCodeLike = (
                     normalized.contains("country") && normalized.contains("code")
                     ) || (
@@ -1029,8 +1101,10 @@ class DocumentFieldExtractorService @Inject constructor() {
                     )
                 val startsWithSingleToken = Regex("""^[a-z]{1,2}\s+.*""").matches(normalized)
                 val hasIndianStateName = containsIndianStateInPersonField(normalized)
-                if (keywordLike || hasCountryCodeLike || startsWithSingleToken || hasIndianStateName) null
-                else value.replace('0', 'O')
+                if (keywordLike || labelNoiseLike || hasCountryCodeLike || startsWithSingleToken || hasIndianStateName) null
+                else value
+                    .replace('0', 'O')
+                    .replace('1', 'I')
             }
             else -> value
         }
@@ -1070,13 +1144,67 @@ class DocumentFieldExtractorService @Inject constructor() {
         return null
     }
 
+    private fun detectPassportUppercaseLabeledValue(text: String, label: String): String? {
+        val labelRegex = Regex(label, RegexOption.IGNORE_CASE)
+        val lines = text.lines().map { it.trim() }
+        for ((i, line) in lines.withIndex()) {
+            val match = labelRegex.find(line) ?: continue
+            val inline = line.substring(match.range.last + 1)
+                .replace(Regex("""^[\s:;/\\\-._]+"""), "")
+                .trim()
+            if (
+                inline.length >= 2 &&
+                isPassportUppercaseDominant(inline) &&
+                !looksLikePassportLabelLine(inline) &&
+                !looksLikePassportRelativeLabelEcho(inline)
+            ) return inline
+
+            for (j in (i + 1)..minOf(i + 4, lines.lastIndex)) {
+                val next = lines[j]
+                    .replace(Regex("""^[\s:;/\\\-._]+"""), "")
+                    .trim()
+                if (next.length < 2) continue
+                if (!isPassportUppercaseDominant(next)) continue
+                if (looksLikePassportLabelLine(next)) continue
+                if (looksLikePassportRelativeLabelEcho(next)) continue
+                return next
+            }
+        }
+        return null
+    }
+
+    private fun detectPassportNameAfterLabel(text: String, label: String): String? {
+        val labelRegex = Regex(label, RegexOption.IGNORE_CASE)
+        val stopRegex = Regex(
+            """(?i)(given\s*name|surname|nationalit|country\s*code|passport\s*(?:no|number)|date|birth|issue|expiry|sex|gender|place)"""
+        )
+        val lines = text.lines().map { it.trim() }
+        for ((i, line) in lines.withIndex()) {
+            if (!labelRegex.containsMatchIn(line)) continue
+            val candidates = mutableListOf<Pair<String, Int>>()
+            for (j in (i + 1)..minOf(i + 8, lines.lastIndex)) {
+                val next = lines[j].replace(Regex("""^[\s:;/\\\-._]+"""), "").trim()
+                if (next.length < 2) continue
+                if (j > i + 1 && stopRegex.containsMatchIn(next)) break
+                if (looksLikePassportLabelLine(next) || looksLikePassportRelativeLabelEcho(next)) continue
+                val normalized = normalizePassportPersonCandidate(next) ?: continue
+                if (looksLikeNationalityToken(normalized)) continue
+                val score = scorePassportGivenNameCandidate(next, normalized, j - i)
+                if (score > 0) candidates += normalized to score
+            }
+            val best = candidates.maxByOrNull { it.second }?.first
+            if (!best.isNullOrBlank()) return best
+        }
+        return null
+    }
+
     private fun detectPassportBackAddress(text: String): String? {
         val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
         val idx = lines.indexOfFirst { Regex("""(?i)\baddress\b""").containsMatchIn(it) }
         if (idx < 0) return null
 
         val stopRegex = Regex(
-            """(?i)(name\s+of\s+spouse|spouse|file\s*no|passport\s*(?:no|number)|name\s+of\s+mother|name\s+of\s+father|legal\s+guardian|date|issue|place)"""
+            """(?i)(name\s+of\s+spouse|spouse|file\s*no|passport\s*(?:no|number)|name\s+of\s+mother|name\s+of\s+father|legal\s+guardian|date|issue|place|pin\b.*india)"""
         )
         val parts = mutableListOf<String>()
         val inline = lines[idx]
@@ -1087,11 +1215,443 @@ class DocumentFieldExtractorService @Inject constructor() {
         }
         for (i in (idx + 1)..minOf(idx + 6, lines.lastIndex)) {
             val line = lines[i]
+            if (Regex("""\b[A-Z]\d{7}\b""").containsMatchIn(line.uppercase())) break
+            if (Regex("""(?i)\b[A-Z]{2}\d{10,}\b""").containsMatchIn(line.uppercase())) break
             if (stopRegex.containsMatchIn(line) && !line.contains("pin", ignoreCase = true)) break
             if (looksLikePassportLabelLine(line)) continue
             parts += line
         }
         return parts.joinToString(", ").takeIf { it.isNotBlank() }
+    }
+
+    private fun detectPassportFrontPlace(text: String, label: String): String? {
+        val labelRegex = Regex(label, RegexOption.IGNORE_CASE)
+        val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val noiseRegex = Regex("""(?i)(country\s*code|nationality|passport\s*(?:no|number)|date|sex|type)""")
+        for ((i, line) in lines.withIndex()) {
+            val match = labelRegex.find(line) ?: continue
+            val inline = line.substring(match.range.last + 1)
+                .replace(Regex("""^[\s:;/\\\-._]+"""), "")
+                .trim()
+            if (inline.length >= 2 && isPassportUppercaseDominant(inline) && !noiseRegex.containsMatchIn(inline)) return inline
+            for (j in (i + 1)..minOf(i + 6, lines.lastIndex)) {
+                val next = lines[j].replace(Regex("""^[\s:;/\\\-._]+"""), "").trim()
+                if (next.length < 2) continue
+                if (!isPassportUppercaseDominant(next)) continue
+                if (noiseRegex.containsMatchIn(next)) continue
+                if (Regex("""^[A-Z]{2,3}$""").matches(next.uppercase())) continue
+                if (detectFirstDate(next) != null) break
+                if (looksLikePassportLabelLine(next)) continue
+                return next
+            }
+        }
+        return detectPassportUppercaseLabeledValue(text, label)
+    }
+
+    private fun detectPassportBackRelative(text: String, label: String): String? {
+        val labelRegex = Regex(label, RegexOption.IGNORE_CASE)
+        val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val stopRegex = Regex(
+            """(?i)(name\s+of\s+father|name\s+of\s+mother|name\s+of\s+spouse|legal\s+guardian|address|file\s*no|passport\s*(?:no|number)|date|place)"""
+        )
+        for ((i, line) in lines.withIndex()) {
+            val match = labelRegex.find(line) ?: continue
+            val inline = line.substring(match.range.last + 1)
+                .replace(Regex("""^[\s:;/\\\-._]+"""), "")
+                .trim()
+            if (inline.length >= 2 && !looksLikePassportLabelLine(inline) && !looksLikePassportRelativeLabelEcho(inline) && !stopRegex.containsMatchIn(inline)) {
+                return inline
+            }
+            for (j in (i + 1)..minOf(i + 5, lines.lastIndex)) {
+                val next = lines[j].replace(Regex("""^[\s:;/\\\-._]+"""), "").trim()
+                if (next.length < 2) continue
+                if (looksLikePassportLabelLine(next)) continue
+                if (looksLikePassportRelativeLabelEcho(next)) continue
+                if (stopRegex.containsMatchIn(next)) break
+                return next
+            }
+        }
+        return null
+    }
+
+    private fun inferPassportBackRelatives(text: String): Triple<String?, String?, String?> {
+        val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val stopRegex = Regex("""(?i)(address|passport\s*(?:no|number)|file\s*no|pin\b|republic|india|type|nationality|place|date|issue|expiry)""")
+        val people = mutableListOf<String>()
+        for (line in lines) {
+            if (stopRegex.containsMatchIn(line)) continue
+            if (looksLikePassportLabelLine(line)) continue
+            if (Regex("""\d""").containsMatchIn(line)) continue
+            val clean = line.replace(Regex("""\s+"""), " ").trim()
+            if (!Regex("""^[A-Za-z ]+$""").matches(clean)) continue
+            val words = clean.split(" ").filter { it.length >= 2 }
+            if (words.size !in 2..6) continue
+            val normalized = sanitizePassportFieldValue("Name of Father/Legal Guardian", clean) ?: continue
+            people += normalized
+            if (people.size == 3) break
+        }
+        return Triple(people.getOrNull(0), people.getOrNull(1), people.getOrNull(2))
+    }
+
+    private fun inferPassportFrontDates(text: String): Triple<String?, String?, String?> {
+        val dates = detectAllDates(text).distinct()
+        if (dates.isEmpty()) return Triple(null, null, null)
+        fun yearOf(v: String): Int? = Regex("""(\d{4})$""").find(v)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        val withYear = dates.mapNotNull { d -> yearOf(d)?.let { y -> d to y } }
+        if (withYear.size < 2) return Triple(dates.firstOrNull(), null, dates.lastOrNull())
+        val sorted = withYear.sortedBy { it.second }
+        val dob = sorted.firstOrNull()?.first
+        val expiry = sorted.lastOrNull()?.first
+        val issue = sorted.drop(1).dropLast(1).firstOrNull()?.first
+            ?: dates.firstOrNull { it != dob && it != expiry }
+        return Triple(dob, issue, expiry)
+    }
+
+    private fun inferPassportIssueDate(
+        text: String,
+        knownDob: String?,
+        knownExpiry: String?
+    ): String? {
+        val dates = detectAllDates(text).distinct()
+        if (dates.isEmpty()) return null
+        val dob = knownDob?.let(::parseReadableDate)
+        val expiry = knownExpiry?.let(::parseReadableDate)
+        if (dob != null && expiry != null) {
+            val candidate = dates
+                .mapNotNull { value -> parseReadableDate(value)?.let { value to it } }
+                .firstOrNull { (_, parsed) -> parsed.after(dob) && parsed.before(expiry) }
+                ?.first
+            if (candidate != null) return candidate
+        }
+        return null
+    }
+
+    private data class PassportFrontLayoutHints(
+        val givenName: String? = null,
+        val placeOfIssue: String? = null,
+        val placeOfBirth: String? = null,
+        val dateOfIssue: String? = null,
+        val dateOfBirth: String? = null,
+        val dateOfExpiry: String? = null
+    )
+
+    private fun inferPassportFrontLayout(text: String): PassportFrontLayoutHints {
+        val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        if (lines.isEmpty()) return PassportFrontLayoutHints()
+
+        val passportIndex = lines.indexOfFirst {
+            detectPassportNumber(normaliseDigits(it)) != null ||
+                Regex("""^P[A-Z0-9<]{20,}$""", RegexOption.IGNORE_CASE).containsMatchIn(it.replace(" ", ""))
+        }.takeIf { it >= 0 } ?: return PassportFrontLayoutHints()
+
+        val givenName = detectPassportGivenName(text) ?: inferPassportFrontGivenName(lines, passportIndex)
+        val issueDate = lines.getOrNull(passportIndex - 1)?.let(::detectFirstDate)
+        val datesBelow = buildList {
+            for (offset in 1..3) {
+                lines.getOrNull(passportIndex + offset)?.let { line ->
+                    detectFirstDate(line)?.let(::add)
+                }
+            }
+        }.distinct()
+
+        val placeHints = inferPassportFrontPlaces(lines, passportIndex)
+
+        return PassportFrontLayoutHints(
+            givenName = givenName,
+            placeOfIssue = placeHints.first,
+            placeOfBirth = placeHints.second,
+            dateOfIssue = issueDate,
+            dateOfBirth = datesBelow.getOrNull(0),
+            dateOfExpiry = datesBelow.getOrNull(1)
+        )
+    }
+
+    private fun inferPassportFrontPlaces(lines: List<String>, passportIndex: Int): Pair<String?, String?> {
+        val normalizedLines = lines.map { it.trim() }.filter { it.isNotEmpty() }
+        if (normalizedLines.isEmpty()) return null to null
+
+        val issueLabelIndex = normalizedLines.indexOfFirst {
+            Regex("""(?i)place\s+of\s+(i[sl]su[ae]?|issue|lssua|lusua)""").containsMatchIn(it)
+        }.takeIf { it >= 0 }
+
+        if (issueLabelIndex != null) {
+            val birthCandidates = normalizedLines
+                .subList(0, issueLabelIndex)
+                .mapNotNull(::normalizePassportPlaceCandidate)
+                .filterNot(::looksLikeNationalityToken)
+                .distinct()
+            val issueCandidates = normalizedLines
+                .drop(issueLabelIndex + 1)
+                .mapNotNull(::normalizePassportPlaceCandidate)
+                .filterNot(::looksLikeNationalityToken)
+                .distinct()
+
+            val birth = birthCandidates.lastOrNull()
+            val issue = issueCandidates.firstOrNull { candidate ->
+                detectFirstDate(candidate) == null && !sameNormalizedPlace(candidate, birth)
+            }
+            if (issue != null || birth != null) return issue to birth
+        }
+
+        val countryIndex = normalizedLines.indexOfFirst {
+            val compact = it.replace(Regex("""[^A-Za-z]"""), "").uppercase()
+            compact == "IND"
+        }.takeIf { it >= 0 }
+
+        val placeWindow = ((countryIndex?.plus(1) ?: (passportIndex - 6).coerceAtLeast(0)) until passportIndex)
+            .map { normalizedLines[it] }
+        val placeCandidates = placeWindow
+            .mapNotNull(::normalizePassportPlaceCandidate)
+            .filterNot(::looksLikeNationalityToken)
+            .distinct()
+
+        val orderedPlaces = inferOrderedPassportPlaces(placeCandidates)
+        val placeOfBirth = orderedPlaces.first
+        val placeOfIssue = orderedPlaces.second
+        return placeOfIssue to placeOfBirth
+    }
+
+    private fun inferOrderedPassportPlaces(placeCandidates: List<String>): Pair<String?, String?> {
+        if (placeCandidates.isEmpty()) return null to null
+        if (placeCandidates.size == 1) return placeCandidates.first() to null
+
+        val birth = inferPassportBirthPlace(placeCandidates)
+        val issue = when {
+            birth != null -> placeCandidates.lastOrNull { !sameNormalizedPlace(it, birth) }
+            else -> placeCandidates.lastOrNull()
+        }
+        return birth to issue
+    }
+
+    private fun inferPassportBirthPlace(placeCandidates: List<String>): String? {
+        if (placeCandidates.isEmpty()) return null
+        val westLike = placeCandidates.firstOrNull { it.contains("WEST", ignoreCase = true) }
+        val bengalLike = placeCandidates.firstOrNull { it.equals("BENGAL", ignoreCase = true) }
+        if (westLike != null && bengalLike != null) {
+            return mergePassportPlaceParts(westLike, bengalLike)
+        }
+        val stateLikeIndex = placeCandidates.indexOfLast {
+            containsIndianStateInPersonField(it.lowercase()) || it.contains("bengal", ignoreCase = true)
+        }
+        if (stateLikeIndex >= 0) {
+            val stateLike = placeCandidates[stateLikeIndex]
+            val previous = placeCandidates.getOrNull(stateLikeIndex - 1)
+            if (previous != null && !containsIndianStateInPersonField(previous.lowercase())) {
+                return mergePassportPlaceParts(previous, stateLike)
+            }
+            return stateLike
+        }
+        return placeCandidates.lastOrNull()
+    }
+
+    private fun mergePassportPlaceParts(first: String, second: String): String {
+        val correctedFirst = first
+            .replace(Regex("""(?i)\bvest\b"""), "WEST")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+        val correctedSecond = second
+            .replace(Regex("""(?i)\bvest\b"""), "WEST")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+        return listOf(correctedFirst, correctedSecond)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+    }
+
+    private fun sameNormalizedPlace(a: String?, b: String?): Boolean {
+        if (a.isNullOrBlank() || b.isNullOrBlank()) return false
+        fun norm(value: String): String = value.uppercase().replace(Regex("""[^A-Z]"""), "")
+        return norm(a).isNotBlank() && norm(a) == norm(b)
+    }
+
+    private fun looksLikeNationalityToken(value: String): Boolean {
+        val compact = value.replace(Regex("""[^A-Za-z]"""), "").uppercase()
+        return compact == "IND" || compact.contains("INDIAN") || compact.contains("NDIAN")
+    }
+
+    private fun inferPassportFrontGivenName(lines: List<String>, passportIndex: Int): String? {
+        val searchEnd = (passportIndex - 1).coerceAtLeast(0)
+        val candidates = (0..searchEnd).mapNotNull { idx ->
+            val raw = lines[idx]
+            val normalized = normalizePassportPersonCandidate(raw) ?: return@mapNotNull null
+            val rawUpperLetters = raw.count(Char::isUpperCase)
+            val rawLowerLetters = raw.count(Char::isLowerCase)
+            val words = normalized.split(" ").filter { it.isNotBlank() }
+            if (words.size < 2) return@mapNotNull null
+            if (rawLowerLetters > rawUpperLetters) return@mapNotNull null
+            if (raw.contains("national", ignoreCase = true) || raw.contains("country", ignoreCase = true)) return@mapNotNull null
+            val score = scorePassportPersonCandidate(normalized) + rawUpperLetters
+            Triple(idx, normalized, score)
+        }
+        return candidates
+            .maxWithOrNull(
+                compareBy<Triple<Int, String, Int>> { it.third }
+                    .thenByDescending { it.second.split(" ").size }
+                    .thenByDescending { it.first }
+            )
+            ?.second
+    }
+
+    private fun detectPassportTopNameBlock(text: String): Pair<String, String>? {
+        val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val stopRegex = Regex(
+            """(?i)(nationalit|country\s*code|passport\s*(?:no|number)|date|birth|issue|expiry|sex|gender|\bind\b|place)"""
+        )
+        val candidates = mutableListOf<String>()
+
+        for (line in lines) {
+            if (stopRegex.containsMatchIn(line)) {
+                if (candidates.size >= 2) break
+                candidates.clear()
+                continue
+            }
+            val normalized = normalizePassportPersonCandidate(line)
+            if (normalized == null) {
+                if (candidates.size >= 2) break
+                candidates.clear()
+                continue
+            }
+            if (normalized.contains("UK", ignoreCase = true) || normalized.contains("U K", ignoreCase = true)) {
+                if (candidates.size >= 2) break
+                candidates.clear()
+                continue
+            }
+            candidates += normalized
+            if (candidates.size == 2) {
+                return candidates[0] to candidates[1]
+            }
+        }
+        return null
+    }
+
+    private fun normalizePassportPlaceFields(fields: List<DocumentField>, frontText: String): List<DocumentField> {
+        if (fields.isEmpty()) return fields
+        val out = fields.toMutableList()
+        val birthIdx = out.indexOfFirst { it.label == "Place of Birth" }
+        val issueIdx = out.indexOfFirst { it.label == "Place of Issue" }
+        if (birthIdx >= 0 && issueIdx >= 0) {
+            val birth = out[birthIdx].value.trim()
+            val issue = out[issueIdx].value.trim()
+            val birthLooksShort = birth.split(" ").size <= 2 && birth.length <= 16
+            val issueLooksLong = issue.split(" ").size >= 3 || issue.length >= 18 || containsIndianStateInPersonField(issue.lowercase())
+            if (birthLooksShort && issueLooksLong) {
+                out[birthIdx] = DocumentField(label = "Place of Birth", value = issue)
+                out[issueIdx] = DocumentField(label = "Place of Issue", value = birth)
+            }
+        }
+
+        val distinctPlaces = inferDistinctPassportPlacesFromText(frontText)
+        if (distinctPlaces.size >= 2) {
+            val inferredBirth = distinctPlaces.first()
+            val inferredIssue = distinctPlaces.last()
+            if (birthIdx >= 0) {
+                val currentBirth = out[birthIdx].value.trim()
+                if (sameNormalizedPlace(currentBirth, inferredIssue) || currentBirth.isBlank()) {
+                    out[birthIdx] = DocumentField(label = "Place of Birth", value = inferredBirth)
+                }
+            }
+            if (issueIdx >= 0) {
+                val currentIssue = out[issueIdx].value.trim()
+                if (sameNormalizedPlace(currentIssue, inferredBirth) || sameNormalizedPlace(currentIssue, out.getOrNull(birthIdx)?.value) || currentIssue.isBlank()) {
+                    out[issueIdx] = DocumentField(label = "Place of Issue", value = inferredIssue)
+                }
+            } else {
+                out += DocumentField(label = "Place of Issue", value = inferredIssue)
+            }
+        }
+        return out
+    }
+
+    private fun inferDistinctPassportPlacesFromText(frontText: String): List<String> {
+        val lines = frontText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val passportIndex = lines.indexOfFirst {
+            detectPassportNumber(normaliseDigits(it)) != null
+        }.takeIf { it >= 0 } ?: lines.size
+        val placeCandidates = lines
+            .take(passportIndex)
+            .mapNotNull(::normalizePassportPlaceCandidate)
+            .filterNot(::looksLikeNationalityToken)
+            .distinct()
+        if (placeCandidates.size < 2) return placeCandidates
+        val ordered = inferOrderedPassportPlaces(placeCandidates)
+        return listOfNotNull(ordered.first, ordered.second).distinctBy { it.uppercase() }
+    }
+
+    private fun normalizePassportDateFields(fields: List<DocumentField>): List<DocumentField> {
+        if (fields.isEmpty()) return fields
+        val byLabel = fields.associateBy({ it.label }, { it.value }).toMutableMap()
+        val dob = byLabel["Date of Birth"]?.let(::parseReadableDate)
+        val issue = byLabel["Date of Issue"]?.let(::parseReadableDate)
+        val expiry = byLabel["Date of Expiry"]?.let(::parseReadableDate)
+
+        if (issue != null && expiry != null && !issue.before(expiry)) {
+            val fallbackDates = fields
+                .filter { it.label in setOf("Date of Birth", "Date of Issue", "Date of Expiry") }
+                .mapNotNull { parseReadableDate(it.value) }
+                .distinct()
+                .sorted()
+            if (fallbackDates.size >= 3) {
+                val birthDate = fallbackDates.first()
+                val expiryDate = fallbackDates.last()
+                val issueDate = fallbackDates.firstOrNull { it.after(birthDate) && it.before(expiryDate) }
+                if (issueDate != null) {
+                    byLabel["Date of Birth"] = formatReadableDate(birthDate)
+                    byLabel["Date of Issue"] = formatReadableDate(issueDate)
+                    byLabel["Date of Expiry"] = formatReadableDate(expiryDate)
+                }
+            }
+        }
+
+        return fields.mapNotNull { field ->
+            val v = byLabel[field.label] ?: return@mapNotNull null
+            DocumentField(label = field.label, value = v)
+        }
+    }
+
+    private fun resolvePassportNameFieldConflicts(
+        fields: List<DocumentField>,
+        frontText: String,
+        combinedText: String
+    ): List<DocumentField> {
+        if (fields.isEmpty()) return fields
+        val byLabel = fields.associateBy({ it.label }, { it.value }).toMutableMap()
+        val placeValues = listOfNotNull(
+            byLabel["Place of Birth"],
+            byLabel["Place of Issue"]
+        )
+        val topNameBlock = detectPassportTopNameBlock(frontText)
+        val partialName = parsePassportMrzNameLine(
+            combinedText,
+            topNameBlock?.first ?: byLabel["Surname"],
+            topNameBlock?.second ?: byLabel["Given Name"]
+        )
+
+        fun conflictsWithPlace(value: String?): Boolean =
+            placeValues.any { sameNormalizedPlace(it, value) }
+
+        val resolvedSurname = when {
+            conflictsWithPlace(byLabel["Surname"]) || looksLikeNationalityToken(byLabel["Surname"].orEmpty()) ->
+                topNameBlock?.first ?: partialName?.surname ?: byLabel["Surname"]
+            else -> byLabel["Surname"]
+        }
+        val resolvedGiven = when {
+            conflictsWithPlace(byLabel["Given Name"]) || looksLikeNationalityToken(byLabel["Given Name"].orEmpty()) ->
+                topNameBlock?.second ?: partialName?.givenName ?: byLabel["Given Name"]
+            else -> byLabel["Given Name"]
+        }
+
+        if (!resolvedSurname.isNullOrBlank()) byLabel["Surname"] = resolvedSurname
+        if (!resolvedGiven.isNullOrBlank()) byLabel["Given Name"] = resolvedGiven
+        if (!resolvedSurname.isNullOrBlank() && !resolvedGiven.isNullOrBlank()) {
+            byLabel["Name"] = "$resolvedGiven $resolvedSurname".trim()
+        }
+
+        return fields.mapNotNull { field ->
+            val value = byLabel[field.label] ?: return@mapNotNull null
+            DocumentField(label = field.label, value = value)
+        }
     }
 
     private fun detectPassportHeuristicName(text: String): String? {
@@ -1120,10 +1680,199 @@ class DocumentFieldExtractorService @Inject constructor() {
             val words = clean.split(" ").filter { it.isNotBlank() }
             if (words.size !in 1..4) continue
             if (words.any { it.length < 2 }) continue
+            if (looksLikePassportCountryBanner(clean)) continue
 
             return clean
         }
         return null
+    }
+
+    private fun detectPassportGivenName(text: String): String? {
+        val labelRegex = Regex(
+            "g(?:[i1l])?v(?:e|a)?n\\s*(?:name|names|nameo|neme|narnes?|anemis|am+e{1,3}|n?amee)(?:\\s*\\(s\\)|s|ls?|[o0])?",
+            RegexOption.IGNORE_CASE
+        )
+        val lines = text.lines().map { it.trim() }
+        for ((i, line) in lines.withIndex()) {
+            if (!labelRegex.containsMatchIn(line)) continue
+            val window = (i + 1)..minOf(i + 8, lines.lastIndex)
+            val best = window
+                .mapNotNull { idx ->
+                    val raw = lines[idx]
+                    if (raw.contains("national", ignoreCase = true) || raw.contains("country", ignoreCase = true)) return@mapNotNull null
+                    val normalized = normalizePassportPersonCandidate(raw) ?: return@mapNotNull null
+                    val score = scorePassportGivenNameCandidate(raw, normalized, idx - i)
+                    if (score <= 0) null else Triple(idx, normalized, score)
+                }
+                .maxWithOrNull(
+                    compareBy<Triple<Int, String, Int>> { it.third }
+                        .thenByDescending { it.second.length }
+                        .thenBy { it.first }
+                )
+            if (best != null) return best.second
+        }
+        return null
+    }
+
+    /**
+     * OCR often reads "REPUBLIC OF INDIA" as "REPUILIC OP TNDTA" etc. That line must not become a person name.
+     */
+    private fun looksLikePassportCountryBanner(raw: String): Boolean {
+        val n = raw.lowercase()
+            .replace(Regex("""[^a-z0-9]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+        if (n.isBlank()) return false
+        val compact = n.replace(" ", "")
+        val hasRepLike = Regex("""(?i)(republic|rep[uui]{0,3}l[iu]?c)""").containsMatchIn(compact)
+        val hasIndiaLike = Regex("""(?i)(india|tndta|tndia|op\s+t|of\s+t)""").containsMatchIn(n)
+        val shortBannerWords = n.split(" ").filter { it.length >= 2 }
+        if (hasRepLike && (hasIndiaLike || (shortBannerWords.size <= 5 && n.contains(" op ")))) return true
+        if (Regex("""(?i)\bthe\s+rep""").containsMatchIn(n)) return true
+        return false
+    }
+
+    private fun inferPassportFrontNames(text: String): Pair<String?, String?> {
+        val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val noise = Regex(
+            """(?i)(republic|repu+il|repulic|india|tndta|type|surname|given|name|nationalit|country\s*code|passport|place|birth|issue|expiry|date|sex|gender|indian|\bind\b|\bop\s+t)"""
+        )
+        val candidates = lines
+            .filter { line ->
+                !noise.containsMatchIn(line) &&
+                    !looksLikePassportCountryBanner(line) &&
+                    !Regex("""\d""").containsMatchIn(line) &&
+                    Regex("""^[A-Za-z ]+$""").matches(line) &&
+                    line.split(" ").count { it.isNotBlank() } in 1..5
+            }
+            .map { it.replace(Regex("""\s+"""), " ").trim() }
+            .distinct()
+
+        if (candidates.isEmpty()) return Pair(null, null)
+        if (candidates.size == 1) {
+            val one = candidates.first()
+            return if (one.split(" ").size == 1) Pair(one, null) else Pair(null, one)
+        }
+        val first = candidates[0]
+        val second = candidates[1]
+        val firstWords = first.split(" ").size
+        return if (firstWords == 1) Pair(first, second) else Pair(null, first)
+    }
+
+    private fun normalizePassportPersonCandidate(raw: String): String? {
+        if (!isPassportUppercaseDominant(raw)) return null
+        val normalized = raw
+            .replace('0', 'O')
+            .replace('1', 'I')
+            .replace('5', 'S')
+            .replace('6', 'G')
+            .replace('8', 'B')
+            .replace(Regex("""[^A-Za-z ]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+        if (normalized.length < 4) return null
+        if (looksLikePassportLabelLine(normalized) || looksLikePassportCountryBanner(normalized)) return null
+        if (containsIndianStateInPersonField(normalized.lowercase())) return null
+        val lower = normalized.lowercase()
+        if (lower == "ind" || lower == "indian") return null
+        val words = normalized.split(" ").filter { it.isNotBlank() }
+        if (words.isEmpty() || words.size > 4) return null
+        if (words.any { it.length < 2 }) return null
+        return normalized
+    }
+
+    private fun normalizePassportNationality(raw: String): String? {
+        val normalized = raw
+            .replace('1', 'I')
+            .replace(Regex("""[^A-Za-z]"""), "")
+            .uppercase()
+        if (normalized.isBlank()) return null
+        return when {
+            normalized.contains("INDIAN") || normalized.contains("NDIAN") || normalized == "IND" -> "INDIAN"
+            else -> capitalise(raw.replace(Regex("""[^A-Za-z ]"""), " ").replace(Regex("""\s+"""), " ").trim())
+        }.takeIf { it.isNotBlank() }
+    }
+
+    private fun normalizePassportNumberCandidate(value: String?): String? {
+        if (value.isNullOrBlank()) return null
+        val compact = value.uppercase().replace(Regex("""[^A-Z0-9]"""), "")
+        if (compact.length < 8) return null
+        val prefix = compact.first()
+        if (!prefix.isLetter()) return null
+        val digits = compact.drop(1)
+            .replace('O', '0')
+            .replace('I', '1')
+            .replace('L', '1')
+            .replace('S', '5')
+            .replace('B', '8')
+        val normalized = prefix + digits.take(7)
+        return normalized.takeIf { Regex("""^[A-Z]\d{7}$""").matches(it) }
+    }
+
+    private fun confirmPassportNumberWithReference(primary: String?, reference: String?): String? {
+        val normalizedPrimary = normalizePassportNumberCandidate(primary) ?: return null
+        val normalizedReference = normalizePassportNumberCandidate(reference) ?: return normalizedPrimary
+        return if (passportNumbersSimilar(normalizedPrimary, normalizedReference)) normalizedPrimary else normalizedPrimary
+    }
+
+    private fun partialMrzPassportReference(text: String): String? =
+        parsePassportMrzLine2(text)?.passportNumber
+
+    private fun passportNumbersSimilar(a: String, b: String): Boolean {
+        if (a.length != 8 || b.length != 8) return false
+        fun canonical(value: String): String = value
+            .uppercase()
+            .replace('O', '0')
+            .replace('I', '1')
+            .replace('L', '1')
+        return canonical(a) == canonical(b)
+    }
+
+    private fun scorePassportGivenNameCandidate(raw: String, normalized: String, distance: Int): Int {
+        val rawUpperLetters = raw.count(Char::isUpperCase)
+        val rawLowerLetters = raw.count(Char::isLowerCase)
+        val words = normalized.split(" ").filter { it.isNotBlank() }
+        var score = scorePassportPersonCandidate(normalized)
+        score += (8 - distance).coerceAtLeast(0)
+        if (rawUpperLetters >= rawLowerLetters) score += 3
+        if (words.size == 1 && normalized.length in 4..12) score += 3
+        if (words.size >= 2 && normalized.length >= 10) score += 2
+        return score
+    }
+
+    private fun scorePassportPersonCandidate(candidate: String): Int {
+        val words = candidate.split(" ").filter { it.isNotBlank() }
+        val totalLetters = candidate.count(Char::isLetter)
+        val longWords = words.count { it.length >= 5 }
+        return when {
+            words.size >= 2 && totalLetters >= 12 -> 6 + longWords
+            words.size >= 2 && totalLetters >= 8 -> 4 + longWords
+            words.size == 1 && totalLetters >= 6 -> 2
+            else -> 0
+        }
+    }
+
+    private fun normalizePassportPlaceCandidate(raw: String): String? {
+        if (!isPassportUppercaseDominant(raw)) return null
+        val normalized = raw
+            .replace(Regex("""(?i)\bvest\b"""), "WEST")
+            .replace(Regex("""[^A-Za-z ]"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+        if (normalized.length < 3) return null
+        if (looksLikePassportLabelLine(normalized) || looksLikePassportCountryBanner(normalized)) return null
+        val lower = normalized.lowercase()
+        if (lower == "ind" || lower == "indian") return null
+        val words = normalized.split(" ").filter { it.isNotBlank() }
+        if (words.isEmpty() || words.size > 4) return null
+        if (words.any { it.length < 2 }) return null
+        return normalized
+    }
+
+    private fun isPassportUppercaseDominant(raw: String): Boolean {
+        val upper = raw.count(Char::isUpperCase)
+        val lower = raw.count(Char::isLowerCase)
+        return upper > 0 && lower <= 1
     }
 
     private fun looksLikePassportRelativeLabelEcho(value: String): Boolean {
@@ -1170,6 +1919,10 @@ class DocumentFieldExtractorService @Inject constructor() {
         val surnameNorm = norm(surname)
         val givenNorm = norm(given)
 
+        if (given.isNotBlank() && surname.isNotBlank()) {
+            name = "$given $surname".trim()
+        }
+
         // Name and surname should never be identical.
         if (nameNorm.isNotBlank() && nameNorm == surnameNorm) {
             if (given.isNotBlank() && norm(given) != surnameNorm) {
@@ -1205,6 +1958,10 @@ class DocumentFieldExtractorService @Inject constructor() {
                 if (given.isBlank()) given = name
                 name = ""
             }
+        }
+
+        if (given.isNotBlank() && surname.isNotBlank()) {
+            name = "$given $surname".trim()
         }
 
         val normalizedMap = byLabel.toMutableMap()
@@ -1297,6 +2054,19 @@ class DocumentFieldExtractorService @Inject constructor() {
         val allCheckDigitsOK: Boolean
     )
 
+    private data class MRZLine2Result(
+        val passportNumber: String,
+        val countryCode: String,
+        val dateOfBirth: String,
+        val dateOfExpiry: String,
+        val sex: String?
+    )
+
+    private data class PassportMrzNameLineResult(
+        val surname: String?,
+        val givenName: String?
+    )
+
     private fun normaliseMRZLine(raw: String): String? {
         val stripped = raw.replace(" ", "").uppercase()
         if (stripped.length != 44) return null
@@ -1305,6 +2075,94 @@ class DocumentFieldExtractorService @Inject constructor() {
         if (stripped.count { it == '<' } < 5) return null
         return stripped
     }
+
+    private fun parsePassportMrzLine2(text: String): MRZLine2Result? {
+        val compactLines = text.lines()
+            .map { it.replace(" ", "").uppercase() }
+            .filter { it.length >= 20 }
+        val pattern = Regex("""([A-Z]\d{7})\d?([A-Z]{3})(\d{2})(\d{2})(\d{2})\d?([MF<])(\d{2})(\d{2})(\d{2})""")
+        for (line in compactLines) {
+            val match = pattern.find(line) ?: continue
+            val passportNumber = match.groupValues[1]
+            val countryCode = match.groupValues[2]
+            val dob = formatMRZDate(match.groupValues[3] + match.groupValues[4] + match.groupValues[5], isBirth = true) ?: continue
+            val sex = when (match.groupValues[6]) {
+                "M" -> "Male"
+                "F" -> "Female"
+                else -> null
+            }
+            val expiry = formatMRZDate(match.groupValues[7] + match.groupValues[8] + match.groupValues[9], isBirth = false) ?: continue
+            return MRZLine2Result(
+                passportNumber = passportNumber,
+                countryCode = countryCode,
+                dateOfBirth = dob,
+                dateOfExpiry = expiry,
+                sex = sex
+            )
+        }
+        return null
+    }
+
+    private fun parsePassportMrzNameLine(
+        text: String,
+        surnameHint: String?,
+        givenHint: String?
+    ): PassportMrzNameLineResult? {
+        val lines = text.lines()
+            .map { it.replace(" ", "").uppercase() }
+            .filter { it.startsWith("PIND") && it.length >= 8 }
+        if (lines.isEmpty()) return null
+
+        val surnameNorm = normalizePassportNameChunk(surnameHint)
+        val givenNorm = normalizePassportNameChunk(givenHint)
+
+        for (line in lines) {
+            val nameBlock = line.removePrefix("PIND")
+                .takeWhile { it.isLetter() || it == '<' }
+                .replace("<", "")
+            if (nameBlock.length < 4) continue
+
+            if (!surnameNorm.isNullOrBlank() && nameBlock.startsWith(surnameNorm)) {
+                val remainder = cleanPassportMrzNameFragment(nameBlock.removePrefix(surnameNorm))
+                val given = when {
+                    !givenNorm.isNullOrBlank() && remainder.contains(givenNorm) -> givenHint
+                    else -> restorePassportNameFromMrz(remainder).takeIf { it.isNotBlank() } ?: givenHint
+                }
+                return PassportMrzNameLineResult(
+                    surname = surnameHint,
+                    givenName = given
+                )
+            }
+
+            if (!givenNorm.isNullOrBlank() && nameBlock.endsWith(givenNorm)) {
+                val prefix = cleanPassportMrzNameFragment(nameBlock.removeSuffix(givenNorm))
+                val surname = when {
+                    !surnameNorm.isNullOrBlank() && prefix.contains(surnameNorm) -> surnameHint
+                    else -> restorePassportNameFromMrz(prefix).takeIf { it.isNotBlank() } ?: surnameHint
+                }
+                return PassportMrzNameLineResult(
+                    surname = surname,
+                    givenName = givenHint
+                )
+            }
+        }
+        return null
+    }
+
+    private fun normalizePassportNameChunk(value: String?): String? =
+        value
+            ?.uppercase()
+            ?.replace(Regex("""[^A-Z]"""), "")
+            ?.takeIf { it.isNotBlank() }
+
+    private fun cleanPassportMrzNameFragment(value: String): String =
+        value
+            .replace(Regex("""^K+"""), "")
+            .replace(Regex("""K+$"""), "")
+            .trim()
+
+    private fun restorePassportNameFromMrz(value: String): String =
+        value.replace("<", " ").replace(Regex("""\s+"""), " ").trim()
 
     private fun mrzCheckDigit(field: String): Char {
         val weights = intArrayOf(7, 3, 1)
@@ -1473,14 +2331,53 @@ class DocumentFieldExtractorService @Inject constructor() {
 
     fun detectFirstDate(text: String): String? = detectAllDates(text).firstOrNull()
 
+    private fun normalizeReadableDate(text: String): String? {
+        val parsed = parseReadableDate(text) ?: return null
+        return formatReadableDate(parsed)
+    }
+
+    private fun parseReadableDate(text: String): Date? {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return null
+        val formats = listOf(
+            SimpleDateFormat("d MMM yyyy", Locale.ENGLISH),
+            SimpleDateFormat("dd MMM yyyy", Locale.ENGLISH)
+        )
+        formats.forEach { format -> format.isLenient = false }
+        for (format in formats) {
+            val parsed = runCatching { format.parse(trimmed) }.getOrNull() ?: continue
+            return parsed
+        }
+        return null
+    }
+
+    private fun formatReadableDate(date: Date): String =
+        SimpleDateFormat("d MMM yyyy", Locale.ENGLISH).format(date)
+
     fun detectAllDates(text: String): List<String> {
         // Parse dates in common Indian formats: DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY
         val dateRegex = Regex("""\b(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})\b""")
+        val compactMonthYearRegex = Regex("""\b(\d{1,2})[/.\-](\d{2})(\d{4})\b""")
+        val normalizedText = text
+            // OCR spaces inside dates: "01/12 /2016", "01 /12/2016"
+            .replace(Regex("""(\d{1,2})\s*([/.\-])\s*(\d{1,2})\s*([/.\-])\s*(\d{2,4})"""), "$1$2$3$4$5")
+            .replace(Regex("""(?<!\d)[A-Za-z](?=\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4})"""), "")
+            .replace(Regex("""(?<=\d)[IiLlTt](?=\d)"""), "/")
+            .replace(':', '/')
+            .replace(Regex("""(?<=\d[/.\-]0)[IiLlTt](?=[/.\-]\d{2,4})"""), "1")
+            .replace(Regex("""(\d{1,2}[/.\-]\d{1,2})[/.\-](\d{3})\b"""), "$1/1$2")
+            .replace(Regex("""\b(\d{1,2})[/.\-](\d{2})(\d{4})\b"""), "$1/$2/$3")
         val results   = mutableListOf<Date>()
         val fmt       = SimpleDateFormat("d MMM yyyy", Locale.ENGLISH)
 
-        for (match in dateRegex.findAll(text)) {
-            val d = match.groupValues[1].toIntOrNull() ?: continue
+        for (match in dateRegex.findAll(normalizedText)) {
+            val dayRaw = match.groupValues[1]
+            val dayNum = dayRaw.toIntOrNull() ?: continue
+            val d = when {
+                dayNum in 1..31 -> dayNum
+                dayNum in 60..69 && dayRaw.length == 2 -> dayRaw.replaceFirst('6', '0').toIntOrNull() ?: dayNum
+                else -> dayNum
+            }
             val m = match.groupValues[2].toIntOrNull() ?: continue
             var y = match.groupValues[3].toIntOrNull() ?: continue
             if (y in 0..99) y += if (y >= 30) 1900 else 2000
@@ -1489,7 +2386,16 @@ class DocumentFieldExtractorService @Inject constructor() {
             cal.set(y, m - 1, d)
             results += cal.time
         }
-        return results.map { fmt.format(it) }
+        for (match in compactMonthYearRegex.findAll(normalizedText)) {
+            val d = match.groupValues[1].toIntOrNull() ?: continue
+            val m = match.groupValues[2].toIntOrNull() ?: continue
+            val y = match.groupValues[3].toIntOrNull() ?: continue
+            if (m !in 1..12 || d !in 1..31) continue
+            val cal = Calendar.getInstance()
+            cal.set(y, m - 1, d)
+            results += cal.time
+        }
+        return results.map { fmt.format(it) }.distinct()
     }
 
     /**

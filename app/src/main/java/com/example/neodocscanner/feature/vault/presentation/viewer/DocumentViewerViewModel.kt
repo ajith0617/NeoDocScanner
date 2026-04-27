@@ -7,8 +7,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.neodocscanner.core.domain.model.Document
 import com.example.neodocscanner.core.domain.model.DocumentClass
-import com.example.neodocscanner.core.domain.model.DocumentField
-import com.example.neodocscanner.core.domain.model.TextRegion
 import com.example.neodocscanner.core.domain.repository.DocumentRepository
 import com.example.neodocscanner.core.domain.repository.SectionRepository
 import com.example.neodocscanner.feature.vault.data.service.ocr.OcrService
